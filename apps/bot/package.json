@@ -1,0 +1,25 @@
+{
+  "name": "@analytics-platform/bot",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "dependencies": {
+    "@analytics-platform/shared": "*",
+    "@analytics-platform/runtime": "*",
+    "@discordjs/voice": "^0.18.0",
+    "discord.js": "^14.17.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "google-tts-api": "^2.0.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  },
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "lint": "node ../../scripts/check-js.js src tests",
+    "test": "node --test tests"
+  }
+}

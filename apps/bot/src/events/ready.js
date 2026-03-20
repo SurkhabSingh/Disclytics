@@ -1,0 +1,14 @@
+const { syncTrackedGuilds } = require("../services/guildSync.service");
+
+function createReadyHandler({ backendClient, logger, voiceTrackingService }) {
+  return async function handleReady(client) {
+    logger.info("Bot connected to Discord gateway", {
+      botTag: client.user.tag,
+      guildCount: client.guilds.cache.size
+    });
+    await syncTrackedGuilds(client, backendClient);
+    await voiceTrackingService.reconcileFromGateway(client);
+  };
+}
+
+module.exports = { createReadyHandler };

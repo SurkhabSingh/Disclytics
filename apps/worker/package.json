@@ -1,0 +1,19 @@
+{
+  "name": "@analytics-platform/worker",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "lint": "node ../../scripts/check-js.js src"
+  },
+  "dependencies": {
+    "@analytics-platform/runtime": "*",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
