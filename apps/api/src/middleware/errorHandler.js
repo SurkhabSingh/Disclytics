@@ -11,6 +11,7 @@ function notFoundHandler(req, res) {
 
 function errorHandler(error, req, res, next) {
   const requestLogger = req.log || logger;
+  const isDevelopment = process.env.NODE_ENV !== "production";
 
   if (res.headersSent) {
     return next(error);
@@ -45,6 +46,10 @@ function errorHandler(error, req, res, next) {
 
   return res.status(500).json({
     error: "Internal server error",
+    details: isDevelopment ? {
+      message: error.message,
+      name: error.name
+    } : undefined,
     requestId: req.requestId || null
   });
 }

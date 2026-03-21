@@ -44,6 +44,30 @@ async function getUserById(client, userId) {
   return rows[0] || null;
 }
 
+async function getUserGuilds(client, userId) {
+  const { rows } = await client.query(
+    `
+      SELECT
+        ug.discord_guild_id AS guild_id,
+        g.name,
+        g.icon,
+        g.bot_present,
+        (
+          (COALESCE(ug.permissions, 0)::BIGINT & 8::BIGINT) = 8::BIGINT OR
+          (COALESCE(ug.permissions, 0)::BIGINT & 32::BIGINT) = 32::BIGINT
+        ) AS can_install
+      FROM user_guilds ug
+      JOIN guilds g
+        ON g.discord_guild_id = ug.discord_guild_id
+      WHERE ug.discord_user_id = $1
+      ORDER BY g.bot_present ASC, can_install DESC, g.name ASC
+    `,
+    [userId]
+  );
+
+  return rows;
+}
+
 async function replaceUserGuilds(client, userId, guilds) {
   await client.query(
     `
@@ -79,6 +103,7 @@ async function replaceUserGuilds(client, userId, guilds) {
 
 module.exports = {
   getUserById,
+  getUserGuilds,
   replaceUserGuilds,
   upsertUser
 };

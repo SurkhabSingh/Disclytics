@@ -1,8 +1,9 @@
 const { env } = require("../config/env");
 const { withTransaction } = require("../db/pool");
 const { AppError } = require("../lib/appError");
+const { logger } = require("../lib/logger");
 const { upsertGuilds } = require("../repositories/guild.repository");
-const { getUserById, replaceUserGuilds, upsertUser } = require("../repositories/user.repository");
+const { getUserById, getUserGuilds, replaceUserGuilds, upsertUser } = require("../repositories/user.repository");
 const {
   exchangeCodeForToken,
   fetchDiscordGuilds,
@@ -13,6 +14,8 @@ const {
   signSessionToken,
   verifyOAuthState
 } = require("../services/jwt.service");
+
+const BOT_INVITE_PERMISSIONS = "3214336";
 
 function getDiscordAuthorizationUrl() {
   const state = signOAuthState();
@@ -25,6 +28,29 @@ function getDiscordAuthorizationUrl() {
   });
 
   return `https://discord.com/oauth2/authorize?${params.toString()}`;
+}
+
+function getDiscordBotInstallUrl(guildId) {
+  const params = new URLSearchParams({
+    client_id: env.DISCORD_CLIENT_ID,
+    permissions: BOT_INVITE_PERMISSIONS,
+    scope: "bot applications.commands"
+  });
+
+  if (guildId) {
+    params.set("guild_id", guildId);
+    params.set("disable_guild_select", "true");
+  }
+
+  return `https://discord.com/oauth2/authorize?${params.toString()}`;
+}
+
+function getGuildIconUrl(guildId, iconHash) {
+  if (!iconHash) {
+    return null;
+  }
+
+  return `https://cdn.discordapp.com/icons/${guildId}/${iconHash}.png?size=128`;
 }
 
 async function startDiscordAuth(req, res) {
@@ -57,36 +83,49 @@ async function handleDiscordCallback(req, res, next) {
     fetchDiscordGuilds(accessToken)
   ]);
 
-  await withTransaction(async (client) => {
-    await upsertUser(client, {
-      userId: discordUser.id,
-      username: discordUser.username,
-      globalName: discordUser.global_name,
-      avatar: discordUser.avatar
+  try {
+    await withTransaction(async (client) => {
+      await upsertUser(client, {
+        userId: discordUser.id,
+        username: discordUser.username,
+        globalName: discordUser.global_name,
+        avatar: discordUser.avatar
+      });
+
+      await upsertGuilds(
+        client,
+        discordGuilds.map((guild) => ({
+          guildId: guild.id,
+          name: guild.name,
+          icon: guild.icon
+        })),
+        {
+          botPresent: false,
+          preserveExistingBotPresence: true
+        }
+      );
+
+      await replaceUserGuilds(
+        client,
+        discordUser.id,
+        discordGuilds.map((guild) => ({
+          guildId: guild.id,
+          permissions: guild.permissions
+        }))
+      );
+    });
+  } catch (error) {
+    logger.error("Failed to persist Discord OAuth callback data", {
+      error,
+      guildCount: discordGuilds.length,
+      userId: discordUser.id
     });
 
-    await upsertGuilds(
-      client,
-      discordGuilds.map((guild) => ({
-        guildId: guild.id,
-        name: guild.name,
-        icon: guild.icon
-      })),
-      {
-        botPresent: false,
-        preserveExistingBotPresence: true
-      }
-    );
-
-    await replaceUserGuilds(
-      client,
-      discordUser.id,
-      discordGuilds.map((guild) => ({
-        guildId: guild.id,
-        permissions: guild.permissions
-      }))
-    );
-  });
+    throw new AppError("Failed to persist Discord OAuth data", 500, {
+      code: error.code || null,
+      message: error.message
+    });
+  }
 
   const sessionToken = signSessionToken(discordUser.id);
 
@@ -101,8 +140,27 @@ async function handleDiscordCallback(req, res, next) {
 }
 
 async function getCurrentUser(req, res) {
-  const user = await withTransaction((client) => getUserById(client, req.auth.userId));
-  res.json({ user });
+  const { user, guilds } = await withTransaction(async (client) => {
+    const [user, guilds] = await Promise.all([
+      getUserById(client, req.auth.userId),
+      getUserGuilds(client, req.auth.userId)
+    ]);
+
+    return { guilds, user };
+  });
+
+  res.json({
+    user,
+    botInstallUrl: getDiscordBotInstallUrl(),
+    guilds: guilds.map((guild) => ({
+      guildId: guild.guild_id,
+      name: guild.name,
+      iconUrl: getGuildIconUrl(guild.guild_id, guild.icon),
+      botPresent: guild.bot_present,
+      canInstall: guild.can_install,
+      installUrl: guild.can_install ? getDiscordBotInstallUrl(guild.guild_id) : null
+    }))
+  });
 }
 
 async function logout(req, res) {

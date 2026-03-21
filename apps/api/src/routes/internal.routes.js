@@ -2,6 +2,7 @@ const { Router } = require("express");
 const { z } = require("zod");
 
 const {
+  getGuildUserStats,
   ingestMessage,
   reconcileVoiceSessions,
   startVoiceSession,
@@ -28,13 +29,30 @@ const guildSchema = z.object({
 
 const channelSchema = z.object({
   channelId: z.string(),
-  name: z.string().nullable().optional()
+  name: z.string().nullable().optional(),
+  type: z.string().nullable().optional()
 });
 
 const messageEventSchema = z.object({
   user: userSchema,
   guild: guildSchema,
   channel: channelSchema,
+  content: z.string().nullable().optional(),
+  attachments: z.array(z.object({
+    url: z.string(),
+    proxyUrl: z.string().nullable().optional(),
+    contentType: z.string().nullable().optional(),
+    name: z.string().nullable().optional(),
+    width: z.number().nullable().optional(),
+    height: z.number().nullable().optional()
+  })).optional(),
+  embeds: z.array(z.object({
+    url: z.string().nullable().optional(),
+    imageUrl: z.string().nullable().optional(),
+    type: z.string().nullable().optional(),
+    title: z.string().nullable().optional(),
+    description: z.string().nullable().optional()
+  })).optional(),
   messageId: z.string().optional(),
   idempotencyKey: z.string(),
   timestamp: z.string().datetime()
@@ -73,6 +91,12 @@ const guildSyncSchema = z.object({
   guilds: z.array(guildSchema)
 });
 
+const statsSummarySchema = z.object({
+  guildId: z.string(),
+  period: z.enum(["day", "week", "month", "lifetime"]),
+  userId: z.string()
+});
+
 const router = Router();
 
 router.use(requireInternalAuth);
@@ -86,5 +110,6 @@ router.post(
   asyncHandler(reconcileVoiceSessions)
 );
 router.post("/guilds/sync", validate(guildSyncSchema), asyncHandler(syncGuildPresence));
+router.post("/analytics/guild-user-summary", validate(statsSummarySchema), asyncHandler(getGuildUserStats));
 
 module.exports = router;

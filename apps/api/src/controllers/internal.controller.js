@@ -1,5 +1,6 @@
 const { withTransaction } = require("../db/pool");
 const { syncBotGuilds } = require("../repositories/guild.repository");
+const { getGuildStatsSummary } = require("../services/analytics.service");
 const {
   ingestMessageEvent,
   reconcileTrackedVoiceSessions,
@@ -32,7 +33,18 @@ async function syncGuildPresence(req, res) {
   res.status(200).json({ syncedGuilds: req.validated.guilds.length });
 }
 
+async function getGuildUserStats(req, res) {
+  const result = await getGuildStatsSummary(
+    req.validated.userId,
+    req.validated.guildId,
+    req.validated.period
+  );
+
+  res.status(200).json(result);
+}
+
 module.exports = {
+  getGuildUserStats,
   ingestMessage,
   reconcileVoiceSessions,
   startVoiceSession,

@@ -20,6 +20,6 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "lint": "node ../../scripts/check-js.js src tests",
-    "test": "node --test tests"
+    "test": "node --test ./tests/*.test.js"
   }
 }

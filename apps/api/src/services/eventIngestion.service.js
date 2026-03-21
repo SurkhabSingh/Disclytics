@@ -23,8 +23,12 @@ async function ingestMessageEvent(payload) {
       type: EVENT_TYPES.MESSAGE,
       timestamp: payload.timestamp,
       metadata: {
+        content: payload.content || null,
+        attachments: payload.attachments || [],
+        embeds: payload.embeds || [],
         messageId: payload.messageId || null,
         channelName: payload.channel.name || null,
+        channelType: payload.channel.type || null,
         guildName: payload.guild.name || null
       }
     });
@@ -115,6 +119,18 @@ async function reconcileTrackedVoiceSessions(payload) {
       if (!exists) {
         await upsertUser(client, session.user);
         await upsertGuilds(client, [session.guild], { botPresent: true });
+        await insertEvent(client, {
+          userId: session.user.userId,
+          guildId: session.guild.guildId,
+          channelId: session.channel.channelId,
+          idempotencyKey: `voice:${session.guild.guildId}:${session.user.userId}:${payload.observedAt}:reconcile-start`,
+          type: EVENT_TYPES.VOICE_JOIN,
+          timestamp: payload.observedAt,
+          metadata: {
+            channelName: session.channel.name || null,
+            reason: "reconciled_present"
+          }
+        });
         await startVoiceSession(client, {
           userId: session.user.userId,
           guildId: session.guild.guildId,

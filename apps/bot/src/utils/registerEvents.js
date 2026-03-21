@@ -2,6 +2,7 @@ const { Events } = require("discord.js");
 
 const { createGuildCreateHandler } = require("../events/guildCreate");
 const { createGuildDeleteHandler } = require("../events/guildDelete");
+const { createInteractionCreateHandler } = require("../events/interactionCreate");
 const { createMessageCreateHandler } = require("../events/messageCreate");
 const { createReadyHandler } = require("../events/ready");
 const { createVoiceStateUpdateHandler } = require("../events/voiceStateUpdate");
@@ -26,7 +27,26 @@ function registerEvents(client, dependencies) {
   );
   client.on(
     Events.MessageCreate,
-    wrap(createMessageCreateHandler(dependencies.backendClient), Events.MessageCreate, dependencies.logger)
+    wrap(
+      createMessageCreateHandler({
+        backendClient: dependencies.backendClient,
+        logger: dependencies.logger.child({
+          component: "message-tracking"
+        })
+      }),
+      Events.MessageCreate,
+      dependencies.logger
+    )
+  );
+  client.on(
+    Events.InteractionCreate,
+    wrap(
+      createInteractionCreateHandler({
+        backendClient: dependencies.backendClient
+      }),
+      Events.InteractionCreate,
+      dependencies.logger
+    )
   );
   client.on(
     Events.VoiceStateUpdate,

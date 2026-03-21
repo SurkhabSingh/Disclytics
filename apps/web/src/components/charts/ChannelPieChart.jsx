@@ -1,11 +1,20 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 
-const COLORS = ["#16423c", "#3a7d44", "#d98f43", "#f4b860", "#a24c27", "#6b8f71", "#8c5e3c", "#ccb08a"];
+const COLORS = [
+  "var(--pie-1)",
+  "var(--pie-2)",
+  "var(--pie-3)",
+  "var(--pie-4)",
+  "var(--pie-5)",
+  "var(--pie-6)",
+  "var(--pie-7)",
+  "var(--pie-8)"
+];
 
 export function ChannelPieChart({ data }) {
   const chartData = data.map((item) => ({
     ...item,
-    name: item.channelId
+    name: item.channelName || item.channelId
   }));
 
   return (
@@ -31,7 +40,18 @@ export function ChannelPieChart({ data }) {
                 <Cell key={entry.channelId} fill={COLORS[index % COLORS.length]} />
               ))}
             </Pie>
-            <Tooltip />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "var(--tooltip-bg)",
+                border: "1px solid var(--tooltip-border)",
+                borderRadius: "10px",
+                color: "var(--tooltip-text)"
+              }}
+              formatter={(value, name) => [`${value} messages`, name]}
+              itemStyle={{ color: "var(--tooltip-text)" }}
+              labelStyle={{ color: "var(--tooltip-text)" }}
+              wrapperStyle={{ outline: "none" }}
+            />
           </PieChart>
         </ResponsiveContainer>
       </div>

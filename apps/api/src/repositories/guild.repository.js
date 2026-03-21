@@ -9,10 +9,10 @@ async function upsertGuilds(client, guilds, options = {}) {
   } = options;
 
   const values = [];
-  const placeholders = guilds.map((guild, index) => {
+  const valuePlaceholders = guilds.map((guild, index) => {
     const offset = index * 4;
     values.push(guild.guildId, guild.name, guild.icon || null, botPresent);
-    return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`;
+    return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, NOW(), NOW())`;
   });
 
   await client.query(
@@ -25,7 +25,7 @@ async function upsertGuilds(client, guilds, options = {}) {
         last_synced_at,
         updated_at
       )
-      VALUES ${placeholders.join(", ")}
+      VALUES ${valuePlaceholders.join(", ")}
       ON CONFLICT (discord_guild_id)
       DO UPDATE SET
         name = EXCLUDED.name,

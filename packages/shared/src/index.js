@@ -17,6 +17,13 @@ const REMINDER_SCHEDULE_TYPES = Object.freeze({
   WEEKLY: "weekly"
 });
 
+const STATS_PERIODS = Object.freeze({
+  DAY: "day",
+  WEEK: "week",
+  MONTH: "month",
+  LIFETIME: "lifetime"
+});
+
 function createVoiceSessionKey(guildId, userId) {
   return `${guildId}:${userId}`;
 }
@@ -25,5 +32,6 @@ module.exports = {
   EVENT_TYPES,
   REMINDER_DELIVERY_TYPES,
   REMINDER_SCHEDULE_TYPES,
+  STATS_PERIODS,
   createVoiceSessionKey
 };
