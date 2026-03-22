@@ -39,7 +39,7 @@ export function GuildInstallPanel({ botInstallUrl, guilds, isOpen, onClose }) {
         <div className="panel-header">
           <div>
             <p className="eyebrow">Server installs</p>
-            <h3>Choose which servers Disclytics should track</h3>
+            <p className="panel-title">Choose which servers Disclytics should track</p>
           </div>
           <div className="header-actions">
             {botInstallUrl ? (

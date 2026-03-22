@@ -9,8 +9,7 @@ import {
 } from "recharts";
 
 function formatDuration(seconds) {
-  const totalSeconds = Math.max(0, Math.round(Number(seconds || 0)));
-  const totalMinutes = Math.floor(totalSeconds / 60);
+  const totalMinutes = Math.floor(Math.max(0, Number(seconds || 0)) / 60);
   const hours = Math.floor(totalMinutes / 60);
   const remainingMinutes = totalMinutes % 60;
 
@@ -19,13 +18,6 @@ function formatDuration(seconds) {
   }
 
   return `${hours}h ${remainingMinutes}m`;
-}
-
-function formatDayLabel(value) {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric"
-  }).format(new Date(value));
 }
 
 function getSafeUpperBound(dataKey) {
@@ -40,58 +32,45 @@ function getSafeUpperBound(dataKey) {
   };
 }
 
-export function VoiceTrendChart({ data, trackedStartDate }) {
+export function HourlyUsageChart({ data, selectedDate }) {
   const chartData = (data || []).map((item) => ({
     ...item,
-    fullDate: item.date,
-    label: formatDayLabel(item.date),
-    totalMessages: Number(item.totalMessages || 0),
-    voiceSeconds: Number(item.totalVoiceSeconds || 0)
+    displayHour: item.hourOfDay + 1,
+    voiceSeconds: Number(item.totalVoiceSeconds || 0),
+    totalMessages: Number(item.totalMessages || 0)
   }));
-  const busiestDay = chartData.reduce((currentBest, item) => {
-    const currentScore = (item.totalMessages || 0) + Math.round((item.voiceSeconds || 0) / 60);
-    const bestScore = currentBest
-      ? currentBest.totalMessages + Math.round((currentBest.voiceSeconds || 0) / 60)
-      : -1;
-    return currentScore > bestScore ? item : currentBest;
-  }, null);
 
   return (
     <section className="panel">
       <div className="panel-header">
         <div>
-          <p className="eyebrow">Overview</p>
-          <p className="panel-title">
-            {trackedStartDate
-              ? `Lifetime usage since ${trackedStartDate}`
-              : "Lifetime usage"}
-          </p>
+          <p className="eyebrow">Day View</p>
+          <p className="panel-title">{selectedDate ? `Hourly activity for ${selectedDate}` : "Hourly activity"}</p>
         </div>
       </div>
       <p className="chart-copy">
-        Messages and voice are split into separate trend views so the long-term pattern is easier to scan.
-        {busiestDay ? ` Your busiest day was ${busiestDay.label}.` : ""}
+        Messages and voice are separated here so each pattern is easy to understand at a glance.
       </p>
       <div className="chart-stack">
         <section className="chart-block">
           <div className="chart-block-header">
             <div>
               <p className="chart-block-kicker">Messages</p>
-              <h4 className="chart-block-title">Daily chat activity</h4>
+              <h4 className="chart-block-title">When you were chatting</h4>
             </div>
-            <p className="chart-block-copy">The curve shows how your daily message activity has changed over time.</p>
+            <p className="chart-block-copy">The curve shows how your message activity rose and fell through the day.</p>
           </div>
           <div className="chart-shell chart-shell-compact">
             <ResponsiveContainer width="100%" height={190}>
               <AreaChart data={chartData}>
                 <defs>
-                  <linearGradient id="messageLifetimeFill" x1="0" x2="0" y1="0" y2="1">
+                  <linearGradient id="messageHourlyFill" x1="0" x2="0" y1="0" y2="1">
                     <stop offset="5%" stopColor="var(--chart-bar)" stopOpacity={0.24} />
                     <stop offset="95%" stopColor="var(--chart-bar)" stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
-                <XAxis dataKey="label" minTickGap={24} />
+                <XAxis dataKey="displayHour" ticks={[4, 8, 12, 16, 20, 24]} />
                 <YAxis allowDecimals={false} domain={[0, getSafeUpperBound("messages")]} />
                 <Tooltip
                   contentStyle={{
@@ -102,13 +81,7 @@ export function VoiceTrendChart({ data, trackedStartDate }) {
                   }}
                   formatter={(value) => [`${value} messages`, "Messages"]}
                   itemStyle={{ color: "var(--tooltip-text)" }}
-                  labelFormatter={(_, payload) => {
-                    const rawDate = payload?.[0]?.payload?.fullDate;
-                    const label = rawDate
-                      ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(rawDate))
-                      : "";
-                    return label ? `On ${label}` : "";
-                  }}
+                  labelFormatter={(value) => `Hour ending ${value}:00`}
                   labelStyle={{ color: "var(--tooltip-text)" }}
                   wrapperStyle={{ outline: "none" }}
                 />
@@ -118,7 +91,7 @@ export function VoiceTrendChart({ data, trackedStartDate }) {
                   name="Messages"
                   stroke="var(--chart-bar)"
                   strokeWidth={3}
-                  fill="url(#messageLifetimeFill)"
+                  fill="url(#messageHourlyFill)"
                   dot={false}
                   activeDot={{ r: 5, fill: "var(--chart-bar)" }}
                 />
@@ -131,25 +104,25 @@ export function VoiceTrendChart({ data, trackedStartDate }) {
           <div className="chart-block-header">
             <div>
               <p className="chart-block-kicker">Voice</p>
-              <h4 className="chart-block-title">Daily voice time</h4>
+              <h4 className="chart-block-title">When you were in voice</h4>
             </div>
-            <p className="chart-block-copy">The curve shows how much time you spent in voice channels each day.</p>
+            <p className="chart-block-copy">The curve shows how much voice time landed inside each hour.</p>
           </div>
           <div className="chart-shell chart-shell-compact">
             <ResponsiveContainer width="100%" height={190}>
               <AreaChart data={chartData}>
                 <defs>
-                  <linearGradient id="voiceLifetimeFill" x1="0" x2="0" y1="0" y2="1">
+                  <linearGradient id="voiceHourlyFill" x1="0" x2="0" y1="0" y2="1">
                     <stop offset="5%" stopColor="var(--chart-line)" stopOpacity={0.28} />
                     <stop offset="95%" stopColor="var(--chart-line)" stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
-                <XAxis dataKey="label" minTickGap={24} />
+                <XAxis dataKey="displayHour" ticks={[4, 8, 12, 16, 20, 24]} />
                 <YAxis
                   allowDecimals={false}
                   domain={[0, getSafeUpperBound("voice")]}
-                  tickFormatter={(value) => formatDuration(Number(value))}
+                  tickFormatter={(value) => formatDuration(value)}
                 />
                 <Tooltip
                   contentStyle={{
@@ -158,15 +131,9 @@ export function VoiceTrendChart({ data, trackedStartDate }) {
                     borderRadius: "10px",
                     color: "var(--tooltip-text)"
                   }}
-                  formatter={(value) => [formatDuration(Number(value)), "Voice time"]}
+                  formatter={(value) => [formatDuration(value), "Voice time"]}
                   itemStyle={{ color: "var(--tooltip-text)" }}
-                  labelFormatter={(_, payload) => {
-                    const rawDate = payload?.[0]?.payload?.fullDate;
-                    const label = rawDate
-                      ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(rawDate))
-                      : "";
-                    return label ? `On ${label}` : "";
-                  }}
+                  labelFormatter={(value) => `Hour ending ${value}:00`}
                   labelStyle={{ color: "var(--tooltip-text)" }}
                   wrapperStyle={{ outline: "none" }}
                 />
@@ -176,7 +143,7 @@ export function VoiceTrendChart({ data, trackedStartDate }) {
                   name="Voice time"
                   stroke="var(--chart-line)"
                   strokeWidth={3}
-                  fill="url(#voiceLifetimeFill)"
+                  fill="url(#voiceHourlyFill)"
                   dot={false}
                   activeDot={{ r: 5, fill: "var(--chart-line)" }}
                 />

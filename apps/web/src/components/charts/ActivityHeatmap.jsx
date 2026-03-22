@@ -20,7 +20,7 @@ export function ActivityHeatmap({ data }) {
       <div className="panel-header">
         <div>
           <p className="eyebrow">Heatmap</p>
-          <h3>Hourly activity pattern</h3>
+          <p className="panel-title">Hourly activity pattern</p>
         </div>
       </div>
       <div className="heatmap">

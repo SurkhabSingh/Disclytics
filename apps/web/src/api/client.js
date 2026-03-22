@@ -38,13 +38,26 @@ export const authApi = {
 };
 
 export const analyticsApi = {
-  getDashboard(days = 7) {
-    return request(`/api/analytics/dashboard?days=${days}`);
+  getDashboard(selectedDate = null) {
+    const params = new URLSearchParams();
+
+    if (selectedDate) {
+      params.set("selectedDate", selectedDate);
+    }
+
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request(`/api/analytics/dashboard${suffix}`);
   }
 };
 
 export const remindersApi = {
   list() {
     return request("/api/reminders");
+  },
+  create(payload) {
+    return request("/api/reminders", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
   }
 };

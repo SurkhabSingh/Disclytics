@@ -1,18 +1,73 @@
 const { pool } = require("../db/pool");
 const {
-  getChannelDistribution,
   getCoverage,
-  getDailyTrend,
   getGuildScopedSummary,
   getHeatmap,
+  getHourlyBreakdown,
+  getLifetimeTrend,
   getRecentMessages,
   getRecentVoiceSessions,
-  getSummaryTotals
+  getScopedSummary,
+  getTopChatChannels,
+  getTopVoiceChannels,
+  getTrackedDateBounds
 } = require("../repositories/analytics.repository");
 const { getUserById } = require("../repositories/user.repository");
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function isoDate(value) {
+  return value ? new Date(value).toISOString().slice(0, 10) : null;
+}
+
+function startOfDayUtc(dateValue) {
+  return `${dateValue}T00:00:00.000Z`;
+}
+
+function nextDayUtc(dateValue) {
+  const start = new Date(startOfDayUtc(dateValue));
+  start.setUTCDate(start.getUTCDate() + 1);
+  return start.toISOString();
+}
+
+function pickSelectedDate(requestedDate, availableDates, fallbackDate) {
+  if (requestedDate && availableDates.includes(requestedDate)) {
+    return requestedDate;
+  }
+
+  if (availableDates.length) {
+    return availableDates[0];
+  }
+
+  return fallbackDate;
+}
+
+function mapSummary(summary) {
+  return {
+    totalMessages: Number(summary?.total_messages || 0),
+    totalVoiceSeconds: Number(summary?.total_voice_seconds || 0),
+    mostActiveChannelId: summary?.most_active_channel_id || null,
+    mostActiveChannelName: summary?.most_active_channel_name || null,
+    mostActiveChannelCount: Number(summary?.most_active_channel_count || 0)
+  };
+}
+
+function mapChatLeaderboard(rows) {
+  return rows.map((row) => ({
+    channelId: row.channel_id,
+    channelName: row.channel_name,
+    messageCount: Number(row.message_count || 0)
+  }));
+}
+
+function mapVoiceLeaderboard(rows) {
+  return rows.map((row) => ({
+    channelId: row.channel_id,
+    channelName: row.channel_name,
+    totalVoiceSeconds: Number(row.total_voice_seconds || 0)
+  }));
 }
 
 function mapMessageMedia(row) {
@@ -55,60 +110,151 @@ function mapMessageMedia(row) {
   return media;
 }
 
-async function getDashboardAnalytics(userId, days) {
+function mapMessages(rows) {
+  return rows.map((row) => ({
+    channelId: row.channel_id,
+    channelName: row.channel_name,
+    content: row.content || null,
+    media: mapMessageMedia(row),
+    occurredAt: row.occurred_at
+  }));
+}
+
+function mapVoiceSessions(rows) {
+  return rows.map((row) => ({
+    channelId: row.channel_id,
+    channelName: row.channel_name,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    durationSeconds: Number(row.duration_seconds || 0),
+    closedReason: row.closed_reason || null
+  }));
+}
+
+function mapTrendRows(rows) {
+  return rows.map((row) => ({
+    date: isoDate(row.stat_date),
+    totalMessages: Number(row.total_messages || 0),
+    totalVoiceSeconds: Number(row.total_voice_seconds || 0)
+  }));
+}
+
+async function getDashboardAnalytics(userId, requestedDate) {
   const client = await pool.connect();
 
   try {
-    const [user, coverage, totals, trend, channelDistribution, heatmap, recentMessages, recentVoiceSessions] = await Promise.all([
-      getUserById(client, userId),
-      getCoverage(client, userId),
-      getSummaryTotals(client, userId, days),
-      getDailyTrend(client, userId, days),
-      getChannelDistribution(client, userId, days),
-      getHeatmap(client, userId, days),
-      getRecentMessages(client, userId, 20),
-      getRecentVoiceSessions(client, userId, 20)
-    ]);
+    const user = await getUserById(client, userId);
+    const coverage = await getCoverage(client, userId);
+    const trackedBounds = await getTrackedDateBounds(client, userId);
+
+    const trackedStartDate = isoDate(trackedBounds.first_activity_date);
+    const lastActivityDate = isoDate(trackedBounds.last_activity_date);
+    const today = new Date().toISOString().slice(0, 10);
+    const lifetimeTrendRows = await getLifetimeTrend(client, userId, trackedStartDate);
+    const lifetimeTrend = mapTrendRows(lifetimeTrendRows);
+    const availableDates = lifetimeTrend
+      .filter((row) => row.totalMessages > 0 || row.totalVoiceSeconds > 0)
+      .map((row) => row.date)
+      .reverse();
+    const selectedDate = pickSelectedDate(requestedDate, availableDates, lastActivityDate || today);
+    const lifetimeStartAt = startOfDayUtc(trackedStartDate || today);
+    const lifetimeEndAt = new Date().toISOString();
+    const todayStartAt = startOfDayUtc(today);
+    const todayEndAt = new Date().toISOString();
+    const selectedDayStartAt = startOfDayUtc(selectedDate);
+    const selectedDayEndAt = nextDayUtc(selectedDate);
+
+    const lifetimeSummary = await getScopedSummary(client, userId, lifetimeStartAt, lifetimeEndAt);
+    const todaySummary = await getScopedSummary(client, userId, todayStartAt, todayEndAt);
+    const historySummary = await getScopedSummary(client, userId, selectedDayStartAt, selectedDayEndAt);
+    const lifetimeChatChannels = await getTopChatChannels(client, userId, lifetimeStartAt, lifetimeEndAt, 8);
+    const todayChatChannels = await getTopChatChannels(client, userId, todayStartAt, todayEndAt, 8);
+    const historyChatChannels = await getTopChatChannels(client, userId, selectedDayStartAt, selectedDayEndAt, 8);
+    const lifetimeVoiceChannels = await getTopVoiceChannels(client, userId, lifetimeStartAt, lifetimeEndAt, 8);
+    const todayVoiceChannels = await getTopVoiceChannels(client, userId, todayStartAt, todayEndAt, 8);
+    const historyVoiceChannels = await getTopVoiceChannels(client, userId, selectedDayStartAt, selectedDayEndAt, 8);
+    const heatmapRows = await getHeatmap(client, userId, lifetimeStartAt, lifetimeEndAt);
+    const todayHourlyBreakdownRows = await getHourlyBreakdown(client, userId, today);
+    const historyHourlyBreakdownRows = await getHourlyBreakdown(client, userId, selectedDate);
+    const lifetimeRecentMessages = await getRecentMessages(client, userId, { limit: 20 });
+    const todayRecentMessages = await getRecentMessages(client, userId, {
+      endAt: todayEndAt,
+      limit: 20,
+      startAt: todayStartAt
+    });
+    const selectedDayRecentMessages = await getRecentMessages(client, userId, {
+      endAt: selectedDayEndAt,
+      limit: 20,
+      startAt: selectedDayStartAt
+    });
+    const lifetimeRecentVoiceSessions = await getRecentVoiceSessions(client, userId, { limit: 20 });
+    const todayRecentVoiceSessions = await getRecentVoiceSessions(client, userId, {
+      endAt: todayEndAt,
+      limit: 20,
+      startAt: todayStartAt
+    });
+    const selectedDayRecentVoiceSessions = await getRecentVoiceSessions(client, userId, {
+      endAt: selectedDayEndAt,
+      limit: 20,
+      startAt: selectedDayStartAt
+    });
 
     return {
       user,
       coverage,
-      summary: {
-        totalMessages: Number(totals.total_messages || 0),
-        totalVoiceSeconds: Number(totals.total_voice_seconds || 0),
-        mostActiveChannelId: totals.most_active_channel_id || null,
-        mostActiveChannelName: totals.most_active_channel_name || null,
-        mostActiveChannelCount: Number(totals.most_active_channel_count || 0)
+      trackedRange: {
+        firstActivityDate: trackedStartDate,
+        lastActivityDate
       },
-      dailyTrend: trend.map((row) => ({
-        date: row.stat_date,
-        totalMessages: Number(row.total_messages),
-        totalVoiceSeconds: Number(row.total_voice_seconds)
-      })),
-      channelDistribution: channelDistribution.map((row) => ({
-        channelId: row.channel_id,
-        channelName: row.channel_name,
-        messageCount: Number(row.message_count)
-      })),
-      heatmap: heatmap.map((row) => ({
+      selectedDate,
+      todayDate: today,
+      availableDates,
+      scopes: {
+        today: {
+          date: today,
+          summary: mapSummary(todaySummary),
+          hourlyBreakdown: todayHourlyBreakdownRows.map((row) => ({
+            hourOfDay: Number(row.hour_of_day),
+            totalMessages: Number(row.total_messages || 0),
+            totalVoiceSeconds: Number(row.total_voice_seconds || 0)
+          })),
+          leaderboards: {
+            chatChannels: mapChatLeaderboard(todayChatChannels),
+            voiceChannels: mapVoiceLeaderboard(todayVoiceChannels)
+          },
+          recentMessages: mapMessages(todayRecentMessages),
+          recentVoiceSessions: mapVoiceSessions(todayRecentVoiceSessions)
+        },
+        lifetime: {
+          summary: mapSummary(lifetimeSummary),
+          trend: lifetimeTrend,
+          leaderboards: {
+            chatChannels: mapChatLeaderboard(lifetimeChatChannels),
+            voiceChannels: mapVoiceLeaderboard(lifetimeVoiceChannels)
+          },
+          recentMessages: mapMessages(lifetimeRecentMessages),
+          recentVoiceSessions: mapVoiceSessions(lifetimeRecentVoiceSessions)
+        },
+        history: {
+          date: selectedDate,
+          summary: mapSummary(historySummary),
+          hourlyBreakdown: historyHourlyBreakdownRows.map((row) => ({
+            hourOfDay: Number(row.hour_of_day),
+            totalMessages: Number(row.total_messages || 0),
+            totalVoiceSeconds: Number(row.total_voice_seconds || 0)
+          })),
+          leaderboards: {
+            chatChannels: mapChatLeaderboard(historyChatChannels),
+            voiceChannels: mapVoiceLeaderboard(historyVoiceChannels)
+          },
+          recentMessages: mapMessages(selectedDayRecentMessages),
+          recentVoiceSessions: mapVoiceSessions(selectedDayRecentVoiceSessions)
+        }
+      },
+      heatmap: heatmapRows.map((row) => ({
         dayOfWeek: Number(row.day_of_week),
         hourOfDay: Number(row.hour_of_day),
         eventCount: Number(row.event_count)
-      })),
-      recentMessages: recentMessages.map((row) => ({
-        channelId: row.channel_id,
-        channelName: row.channel_name,
-        content: row.content || null,
-        media: mapMessageMedia(row),
-        occurredAt: row.occurred_at
-      })),
-      recentVoiceSessions: recentVoiceSessions.map((row) => ({
-        channelId: row.channel_id,
-        channelName: row.channel_name,
-        startTime: row.start_time,
-        endTime: row.end_time,
-        durationSeconds: Number(row.duration_seconds || 0),
-        closedReason: row.closed_reason || null
       }))
     };
   } finally {

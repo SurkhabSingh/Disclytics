@@ -104,7 +104,7 @@ export function ActivityDetailsPanel({ recentMessages, recentVoiceSessions }) {
       <div className="panel-header">
         <div>
           <p className="eyebrow">Activity log</p>
-          <h3>See the actual sessions and messages behind the totals</h3>
+          <p className="panel-title">See the actual sessions and messages behind the totals</p>
         </div>
       </div>
 

@@ -23,65 +23,56 @@ async function getCoverage(client, userId) {
   };
 }
 
-async function getSummaryTotals(client, userId, days) {
+async function getTrackedDateBounds(client, userId) {
   const { rows } = await client.query(
     `
-      WITH message_totals AS (
-        SELECT COUNT(*)::INTEGER AS total_messages
+      WITH message_bounds AS (
+        SELECT
+          MIN(DATE(occurred_at)) AS first_date,
+          MAX(DATE(occurred_at)) AS last_date
         FROM events
         WHERE discord_user_id = $1
           AND type = 'message'
-          AND occurred_at >= NOW() - ($2 || ' days')::INTERVAL
       ),
-      voice_totals AS (
+      voice_bounds AS (
         SELECT
-          COALESCE(SUM(
-            GREATEST(
-              0,
-              EXTRACT(EPOCH FROM (
-                LEAST(COALESCE(end_time, NOW()), NOW()) -
-                GREATEST(start_time, NOW() - ($2 || ' days')::INTERVAL)
-              ))
-            )
-          ), 0)::INTEGER AS total_voice_seconds
+          MIN(DATE(start_time)) AS first_date,
+          MAX(DATE(COALESCE(end_time, start_time))) AS last_date
         FROM voice_sessions
         WHERE discord_user_id = $1
-          AND start_time < NOW()
-          AND COALESCE(end_time, NOW()) > NOW() - ($2 || ' days')::INTERVAL
-      ),
-      top_channel AS (
-        SELECT
-          discord_channel_id,
-          COALESCE(MAX(metadata->>'channelName'), discord_channel_id) AS channel_name,
-          COUNT(*)::INTEGER AS activity_count
-        FROM events
-        WHERE discord_user_id = $1
-          AND occurred_at >= NOW() - ($2 || ' days')::INTERVAL
-        GROUP BY discord_channel_id
-        ORDER BY activity_count DESC
-        LIMIT 1
       )
       SELECT
-        message_totals.total_messages,
-        voice_totals.total_voice_seconds,
-        top_channel.discord_channel_id AS most_active_channel_id,
-        top_channel.channel_name AS most_active_channel_name,
-        COALESCE(top_channel.activity_count, 0)::INTEGER AS most_active_channel_count
-      FROM message_totals, voice_totals
-      LEFT JOIN top_channel ON TRUE
+        CASE
+          WHEN message_bounds.first_date IS NULL THEN voice_bounds.first_date
+          WHEN voice_bounds.first_date IS NULL THEN message_bounds.first_date
+          ELSE LEAST(message_bounds.first_date, voice_bounds.first_date)
+        END AS first_activity_date,
+        CASE
+          WHEN message_bounds.last_date IS NULL THEN voice_bounds.last_date
+          WHEN voice_bounds.last_date IS NULL THEN message_bounds.last_date
+          ELSE GREATEST(message_bounds.last_date, voice_bounds.last_date)
+        END AS last_activity_date
+      FROM message_bounds, voice_bounds
     `,
-    [userId, String(days)]
+    [userId]
   );
 
-  return rows[0];
+  return rows[0] || {
+    first_activity_date: null,
+    last_activity_date: null
+  };
 }
 
-async function getDailyTrend(client, userId, days) {
+async function getLifetimeTrend(client, userId, startDate) {
+  if (!startDate) {
+    return [];
+  }
+
   const { rows } = await client.query(
     `
       WITH day_series AS (
         SELECT generate_series(
-          CURRENT_DATE - ($2::INTEGER - 1),
+          $2::DATE,
           CURRENT_DATE,
           INTERVAL '1 day'
         )::DATE AS stat_date
@@ -93,7 +84,7 @@ async function getDailyTrend(client, userId, days) {
         FROM events
         WHERE discord_user_id = $1
           AND type = 'message'
-          AND occurred_at >= CURRENT_DATE - ($2::INTEGER - 1)
+          AND occurred_at >= $2::DATE
         GROUP BY DATE(occurred_at)
       ),
       voice AS (
@@ -127,13 +118,69 @@ async function getDailyTrend(client, userId, days) {
       LEFT JOIN voice ON voice.stat_date = ds.stat_date
       ORDER BY ds.stat_date ASC
     `,
-    [userId, days]
+    [userId, startDate]
   );
 
   return rows;
 }
 
-async function getChannelDistribution(client, userId, days) {
+async function getScopedSummary(client, userId, startAt, endAt) {
+  const { rows } = await client.query(
+    `
+      WITH message_totals AS (
+        SELECT COUNT(*)::INTEGER AS total_messages
+        FROM events
+        WHERE discord_user_id = $1
+          AND type = 'message'
+          AND occurred_at >= $2::TIMESTAMPTZ
+          AND occurred_at < $3::TIMESTAMPTZ
+      ),
+      voice_totals AS (
+        SELECT
+          COALESCE(SUM(
+            GREATEST(
+              0,
+              EXTRACT(EPOCH FROM (
+                LEAST(COALESCE(end_time, $3::TIMESTAMPTZ), $3::TIMESTAMPTZ) -
+                GREATEST(start_time, $2::TIMESTAMPTZ)
+              ))
+            )
+          ), 0)::INTEGER AS total_voice_seconds
+        FROM voice_sessions
+        WHERE discord_user_id = $1
+          AND start_time < $3::TIMESTAMPTZ
+          AND COALESCE(end_time, $3::TIMESTAMPTZ) > $2::TIMESTAMPTZ
+      ),
+      top_channel AS (
+        SELECT
+          discord_channel_id,
+          COALESCE(MAX(metadata->>'channelName'), discord_channel_id) AS channel_name,
+          COUNT(*)::INTEGER AS activity_count
+        FROM events
+        WHERE discord_user_id = $1
+          AND type = 'message'
+          AND occurred_at >= $2::TIMESTAMPTZ
+          AND occurred_at < $3::TIMESTAMPTZ
+        GROUP BY discord_channel_id
+        ORDER BY activity_count DESC
+        LIMIT 1
+      )
+      SELECT
+        message_totals.total_messages,
+        voice_totals.total_voice_seconds,
+        top_channel.discord_channel_id AS most_active_channel_id,
+        top_channel.channel_name AS most_active_channel_name,
+        COALESCE(top_channel.activity_count, 0)::INTEGER AS most_active_channel_count
+      FROM message_totals, voice_totals
+      LEFT JOIN top_channel ON TRUE
+    `,
+    [userId, startAt, endAt]
+  );
+
+  return rows[0] || null;
+}
+
+async function getTopChatChannels(client, userId, startAt, endAt, limit = 8) {
   const { rows } = await client.query(
     `
       SELECT
@@ -143,18 +190,59 @@ async function getChannelDistribution(client, userId, days) {
       FROM events
       WHERE discord_user_id = $1
         AND type = 'message'
-        AND occurred_at >= NOW() - ($2 || ' days')::INTERVAL
+        AND occurred_at >= $2::TIMESTAMPTZ
+        AND occurred_at < $3::TIMESTAMPTZ
       GROUP BY discord_channel_id
-      ORDER BY message_count DESC
-      LIMIT 8
+      ORDER BY message_count DESC, channel_name ASC
+      LIMIT $4
     `,
-    [userId, String(days)]
+    [userId, startAt, endAt, limit]
   );
 
   return rows;
 }
 
-async function getHeatmap(client, userId, days) {
+async function getTopVoiceChannels(client, userId, startAt, endAt, limit = 8) {
+  const { rows } = await client.query(
+    `
+      WITH channel_names AS (
+        SELECT
+          discord_channel_id,
+          COALESCE(MAX(metadata->>'channelName'), discord_channel_id) AS channel_name
+        FROM events
+        WHERE discord_user_id = $1
+          AND type IN ('voice_join', 'voice_leave', 'voice_switch')
+        GROUP BY discord_channel_id
+      )
+      SELECT
+        vs.discord_channel_id AS channel_id,
+        COALESCE(channel_names.channel_name, vs.discord_channel_id) AS channel_name,
+        COALESCE(SUM(
+          GREATEST(
+            0,
+            EXTRACT(EPOCH FROM (
+              LEAST(COALESCE(vs.end_time, $3::TIMESTAMPTZ), $3::TIMESTAMPTZ) -
+              GREATEST(vs.start_time, $2::TIMESTAMPTZ)
+            ))
+          )
+        ), 0)::INTEGER AS total_voice_seconds
+      FROM voice_sessions vs
+      LEFT JOIN channel_names
+        ON channel_names.discord_channel_id = vs.discord_channel_id
+      WHERE vs.discord_user_id = $1
+        AND vs.start_time < $3::TIMESTAMPTZ
+        AND COALESCE(vs.end_time, $3::TIMESTAMPTZ) > $2::TIMESTAMPTZ
+      GROUP BY vs.discord_channel_id, channel_names.channel_name
+      ORDER BY total_voice_seconds DESC, channel_name ASC
+      LIMIT $4
+    `,
+    [userId, startAt, endAt, limit]
+  );
+
+  return rows;
+}
+
+async function getHeatmap(client, userId, startAt, endAt) {
   const { rows } = await client.query(
     `
       SELECT
@@ -163,17 +251,94 @@ async function getHeatmap(client, userId, days) {
         COUNT(*)::INTEGER AS event_count
       FROM events
       WHERE discord_user_id = $1
-        AND occurred_at >= NOW() - ($2 || ' days')::INTERVAL
+        AND occurred_at >= $2::TIMESTAMPTZ
+        AND occurred_at < $3::TIMESTAMPTZ
       GROUP BY day_of_week, hour_of_day
       ORDER BY day_of_week ASC, hour_of_day ASC
     `,
-    [userId, String(days)]
+    [userId, startAt, endAt]
   );
 
   return rows;
 }
 
-async function getRecentMessages(client, userId, limit = 20) {
+async function getHourlyBreakdown(client, userId, selectedDate) {
+  const { rows } = await client.query(
+    `
+      WITH hour_series AS (
+        SELECT
+          generate_series(0, 23) AS hour_of_day
+      ),
+      hour_windows AS (
+        SELECT
+          hour_of_day,
+          ($2::DATE + make_interval(hours => hour_of_day)) AS hour_start,
+          ($2::DATE + make_interval(hours => hour_of_day + 1)) AS hour_end
+        FROM hour_series
+      ),
+      messages AS (
+        SELECT
+          EXTRACT(HOUR FROM occurred_at)::INTEGER AS hour_of_day,
+          COUNT(*)::INTEGER AS total_messages
+        FROM events
+        WHERE discord_user_id = $1
+          AND type = 'message'
+          AND occurred_at >= $2::DATE
+          AND occurred_at < ($2::DATE + INTERVAL '1 day')
+        GROUP BY EXTRACT(HOUR FROM occurred_at)
+      ),
+      voice AS (
+        SELECT
+          hw.hour_of_day,
+          COALESCE(SUM(
+            GREATEST(
+              0,
+              EXTRACT(EPOCH FROM (
+                LEAST(COALESCE(vs.end_time, hw.hour_end), hw.hour_end) -
+                GREATEST(vs.start_time, hw.hour_start)
+              ))
+            )
+          ), 0)::INTEGER AS total_voice_seconds
+        FROM hour_windows hw
+        LEFT JOIN voice_sessions vs
+          ON vs.discord_user_id = $1
+          AND vs.start_time < hw.hour_end
+          AND COALESCE(vs.end_time, hw.hour_end) > hw.hour_start
+        GROUP BY hw.hour_of_day
+      )
+      SELECT
+        hw.hour_of_day,
+        COALESCE(messages.total_messages, 0)::INTEGER AS total_messages,
+        COALESCE(voice.total_voice_seconds, 0)::INTEGER AS total_voice_seconds
+      FROM hour_windows hw
+      LEFT JOIN messages ON messages.hour_of_day = hw.hour_of_day
+      LEFT JOIN voice ON voice.hour_of_day = hw.hour_of_day
+      ORDER BY hw.hour_of_day ASC
+    `,
+    [userId, selectedDate]
+  );
+
+  return rows;
+}
+
+async function getRecentMessages(client, userId, options = {}) {
+  const {
+    endAt = null,
+    limit = 20,
+    startAt = null
+  } = options;
+
+  const params = [userId];
+  const filters = ["discord_user_id = $1", "type = 'message'"];
+
+  if (startAt && endAt) {
+    params.push(startAt, endAt);
+    filters.push(`occurred_at >= $${params.length - 1}::TIMESTAMPTZ`);
+    filters.push(`occurred_at < $${params.length}::TIMESTAMPTZ`);
+  }
+
+  params.push(limit);
+
   const { rows } = await client.query(
     `
       SELECT
@@ -184,18 +349,34 @@ async function getRecentMessages(client, userId, limit = 20) {
         metadata->'attachments' AS attachments,
         metadata->'embeds' AS embeds
       FROM events
-      WHERE discord_user_id = $1
-        AND type = 'message'
+      WHERE ${filters.join("\n        AND ")}
       ORDER BY occurred_at DESC
-      LIMIT $2
+      LIMIT $${params.length}
     `,
-    [userId, limit]
+    params
   );
 
   return rows;
 }
 
-async function getRecentVoiceSessions(client, userId, limit = 20) {
+async function getRecentVoiceSessions(client, userId, options = {}) {
+  const {
+    endAt = null,
+    limit = 20,
+    startAt = null
+  } = options;
+
+  const params = [userId];
+  const filters = ["vs.discord_user_id = $1"];
+
+  if (startAt && endAt) {
+    params.push(startAt, endAt);
+    filters.push(`vs.start_time < $${params.length}::TIMESTAMPTZ`);
+    filters.push(`COALESCE(vs.end_time, $${params.length}::TIMESTAMPTZ) > $${params.length - 1}::TIMESTAMPTZ`);
+  }
+
+  params.push(limit);
+
   const { rows } = await client.query(
     `
       SELECT
@@ -219,11 +400,11 @@ async function getRecentVoiceSessions(client, userId, limit = 20) {
         ORDER BY ABS(EXTRACT(EPOCH FROM (e.occurred_at - vs.start_time))) ASC, e.id DESC
         LIMIT 1
       ) voice_event ON TRUE
-      WHERE vs.discord_user_id = $1
-      ORDER BY start_time DESC
-      LIMIT $2
+      WHERE ${filters.join("\n        AND ")}
+      ORDER BY vs.start_time DESC
+      LIMIT $${params.length}
     `,
-    [userId, limit]
+    params
   );
 
   return rows;
@@ -348,12 +529,15 @@ async function getGuildScopedSummary(client, userId, guildId, period) {
 }
 
 module.exports = {
-  getChannelDistribution,
   getCoverage,
-  getDailyTrend,
   getGuildScopedSummary,
   getHeatmap,
+  getHourlyBreakdown,
+  getLifetimeTrend,
   getRecentMessages,
   getRecentVoiceSessions,
-  getSummaryTotals
+  getScopedSummary,
+  getTopChatChannels,
+  getTopVoiceChannels,
+  getTrackedDateBounds
 };
