@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function getHeatClass(count) {
@@ -8,7 +10,7 @@ function getHeatClass(count) {
   return "heat-cell";
 }
 
-export function ActivityHeatmap({ data }) {
+export const ActivityHeatmap = memo(function ActivityHeatmap({ data }) {
   const matrix = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
 
   data.forEach((item) => {
@@ -41,4 +43,4 @@ export function ActivityHeatmap({ data }) {
       </div>
     </section>
   );
-}
+});

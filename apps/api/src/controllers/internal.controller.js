@@ -7,6 +7,7 @@ const {
   startTrackedVoiceSession,
   stopTrackedVoiceSession
 } = require("../services/eventIngestion.service");
+const { createBotUserReminder } = require("../services/reminder.service");
 
 async function ingestMessage(req, res) {
   const event = await ingestMessageEvent(req.validated);
@@ -33,6 +34,11 @@ async function syncGuildPresence(req, res) {
   res.status(200).json({ syncedGuilds: req.validated.guilds.length });
 }
 
+async function createInternalReminder(req, res) {
+  const reminder = await createBotUserReminder(req.validated);
+  res.status(201).json({ reminder });
+}
+
 async function getGuildUserStats(req, res) {
   const result = await getGuildStatsSummary(
     req.validated.userId,
@@ -44,6 +50,7 @@ async function getGuildUserStats(req, res) {
 }
 
 module.exports = {
+  createInternalReminder,
   getGuildUserStats,
   ingestMessage,
   reconcileVoiceSessions,

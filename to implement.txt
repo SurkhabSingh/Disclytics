@@ -1,0 +1,9 @@
+- individual logging for each day alongside overall logging(lifetime) -> per day graph for voice and chats, and an overall graph for lifetime usage - done
+- leaderboard for most active vcs and channels(based off of time spent) - done
+- tabs to allow users to switch between dates or check their historical data(example data of some particular days not just the aggregate data) -done
+- creating reminders for actions using slash command or from the ui directly  - done
+- testing of slash commands
+- ui improvements -
+- static graph values need to be fixed - done
+- logging dms and chats and then showing their most messages friend(partner in crime is what we will use to refer it as)
+- sending dms to other people through reminders

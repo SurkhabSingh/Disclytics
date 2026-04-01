@@ -17,6 +17,24 @@ const {
 
 const BOT_INVITE_PERMISSIONS = "3214336";
 
+function getSessionCookieOptions() {
+  const secure = env.SESSION_COOKIE_SECURE === "auto"
+    ? env.WEB_APP_URL.startsWith("https://")
+    : env.SESSION_COOKIE_SECURE === "true";
+  const sameSite = secure && env.SESSION_COOKIE_SAME_SITE === "none"
+    ? "none"
+    : (env.SESSION_COOKIE_SAME_SITE === "none" ? "lax" : env.SESSION_COOKIE_SAME_SITE);
+
+  return {
+    domain: env.SESSION_COOKIE_DOMAIN || undefined,
+    httpOnly: true,
+    maxAge: env.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
+    path: env.SESSION_COOKIE_PATH,
+    sameSite,
+    secure
+  };
+}
+
 function getDiscordAuthorizationUrl() {
   const state = signOAuthState();
   const params = new URLSearchParams({
@@ -51,6 +69,15 @@ function getGuildIconUrl(guildId, iconHash) {
   }
 
   return `https://cdn.discordapp.com/icons/${guildId}/${iconHash}.png?size=128`;
+}
+
+function getUserAvatarUrl(userId, avatarHash) {
+  if (!userId || !avatarHash) {
+    return null;
+  }
+
+  const extension = avatarHash.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.${extension}?size=128`;
 }
 
 async function startDiscordAuth(req, res) {
@@ -129,12 +156,7 @@ async function handleDiscordCallback(req, res, next) {
 
   const sessionToken = signSessionToken(discordUser.id);
 
-  res.cookie(env.SESSION_COOKIE_NAME, sessionToken, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: env.WEB_APP_URL.startsWith("https://"),
-    maxAge: 7 * 24 * 60 * 60 * 1000
-  });
+  res.cookie(env.SESSION_COOKIE_NAME, sessionToken, getSessionCookieOptions());
 
   res.redirect(`${env.WEB_APP_URL}/dashboard`);
 }
@@ -150,7 +172,13 @@ async function getCurrentUser(req, res) {
   });
 
   res.json({
-    user,
+    user: user ? {
+      userId: user.discord_user_id,
+      username: user.username,
+      global_name: user.global_name,
+      timezone: user.timezone,
+      avatar_url: getUserAvatarUrl(user.discord_user_id, user.avatar)
+    } : null,
     botInstallUrl: getDiscordBotInstallUrl(),
     guilds: guilds.map((guild) => ({
       guildId: guild.guild_id,
@@ -164,7 +192,8 @@ async function getCurrentUser(req, res) {
 }
 
 async function logout(req, res) {
-  res.clearCookie(env.SESSION_COOKIE_NAME);
+  const { maxAge, ...clearOptions } = getSessionCookieOptions();
+  res.clearCookie(env.SESSION_COOKIE_NAME, clearOptions);
   res.status(204).send();
 }
 

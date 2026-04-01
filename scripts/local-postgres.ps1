@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("start", "stop", "status")]
+  [ValidateSet("start", "stop", "status", "reset-data", "reset-analytics")]
   [string]$Action = "start",
   [int]$Port = 5433,
   [string]$DatabaseName = "discord_analytics",
@@ -65,6 +65,8 @@ $localRoot = Join-Path $repoRoot ".local"
 $dataDir = Join-Path $localRoot "postgres"
 $logFile = Join-Path $localRoot "postgres.log"
 $schemaPath = Join-Path $repoRoot "apps\api\sql\001_init.sql"
+$resetDataPath = Join-Path $repoRoot "apps\api\sql\900_reset_local_data.sql"
+$resetAnalyticsPath = Join-Path $repoRoot "apps\api\sql\901_reset_analytics_data.sql"
 
 $initDb = Get-PostgresBinary "initdb.exe"
 $pgCtl = Get-PostgresBinary "pg_ctl.exe"
@@ -142,5 +144,43 @@ switch ($Action) {
     if ($LASTEXITCODE -eq 0) {
       Write-Host "DATABASE_URL=postgres://postgres:postgres@localhost:$Port/$DatabaseName"
     }
+  }
+
+  "reset-data" {
+    if (-not (Test-Path $dataDir)) {
+      throw "Local PostgreSQL has not been initialized yet."
+    }
+
+    Wait-ForPostgres -PgIsReadyPath $pgIsReady -WaitPort $Port -WaitUserName $UserName
+
+    Invoke-CheckedProcess -FilePath $psql -Arguments @(
+      "-h", "localhost",
+      "-p", $Port,
+      "-U", $UserName,
+      "-d", $DatabaseName,
+      "-f", $resetDataPath
+    )
+
+    Write-Host "Local Disclytics data has been reset."
+    Write-Host "Users will need to log in again after this reset."
+  }
+
+  "reset-analytics" {
+    if (-not (Test-Path $dataDir)) {
+      throw "Local PostgreSQL has not been initialized yet."
+    }
+
+    Wait-ForPostgres -PgIsReadyPath $pgIsReady -WaitPort $Port -WaitUserName $UserName
+
+    Invoke-CheckedProcess -FilePath $psql -Arguments @(
+      "-h", "localhost",
+      "-p", $Port,
+      "-U", $UserName,
+      "-d", $DatabaseName,
+      "-f", $resetAnalyticsPath
+    )
+
+    Write-Host "Local Disclytics analytics data has been reset."
+    Write-Host "Users, guild installs, and reminders were preserved."
   }
 }

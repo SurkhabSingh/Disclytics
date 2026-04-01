@@ -3,13 +3,16 @@ import { FiLogIn, FiLogOut, FiMoon, FiPlus, FiSun } from "react-icons/fi";
 
 import { analyticsApi, authApi, remindersApi } from "../api/client";
 import { ActivityDetailsPanel } from "../components/ActivityDetailsPanel";
+import { EngagementKpiGrid } from "../components/EngagementKpiGrid";
 import { HistoryCalendar } from "../components/HistoryCalendar";
 import { LeaderboardPanel } from "../components/LeaderboardPanel";
 import { MetricCard } from "../components/MetricCard";
 import { ReminderPanel } from "../components/ReminderPanel";
 import { ActivityHeatmap } from "../components/charts/ActivityHeatmap";
+import { EngagementScatterChart } from "../components/charts/EngagementScatterChart";
+import { EngagementTrendChart } from "../components/charts/EngagementTrendChart";
 import { HourlyUsageChart } from "../components/charts/HourlyUsageChart";
-import { VoiceTrendChart } from "../components/charts/VoiceTrendChart";
+import { applyLiveVoiceProgress } from "../features/analytics/dashboardModel";
 
 const THEME_STORAGE_KEY = "disclytics-theme";
 const DASHBOARD_REFRESH_MS = 10000;
@@ -70,92 +73,6 @@ function getInitialTheme() {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function applyScopeLiveVoice(scope, elapsedSeconds, options = {}) {
-  if (!scope || elapsedSeconds <= 0) {
-    return scope;
-  }
-
-  const activeSessions = (scope.recentVoiceSessions || []).filter((session) => !session.endTime);
-
-  if (!activeSessions.length) {
-    return scope;
-  }
-
-  const liveExtraSeconds = activeSessions.length * elapsedSeconds;
-  const nextScope = {
-    ...scope,
-    summary: {
-      ...scope.summary,
-      totalVoiceSeconds: Number(scope.summary?.totalVoiceSeconds || 0) + liveExtraSeconds
-    },
-    recentVoiceSessions: (scope.recentVoiceSessions || []).map((session) => (
-      session.endTime
-        ? session
-        : {
-          ...session,
-          durationSeconds: Number(session.durationSeconds || 0) + elapsedSeconds
-        }
-    ))
-  };
-
-  if (Array.isArray(scope.trend)) {
-    nextScope.trend = scope.trend.map((item, index, items) => (
-      index === items.length - 1
-        ? {
-          ...item,
-          totalVoiceSeconds: Number(item.totalVoiceSeconds || 0) + liveExtraSeconds
-        }
-        : item
-    ));
-  }
-
-  if (Array.isArray(scope.hourlyBreakdown) && typeof options.currentHour === "number") {
-    nextScope.hourlyBreakdown = scope.hourlyBreakdown.map((item) => (
-      item.hourOfDay === options.currentHour
-        ? {
-          ...item,
-          totalVoiceSeconds: Number(item.totalVoiceSeconds || 0) + liveExtraSeconds
-        }
-        : item
-    ));
-  }
-
-  return nextScope;
-}
-
-function applyLiveVoiceProgress(dashboard, lastUpdatedAt, nowTimestamp) {
-  if (!dashboard || !lastUpdatedAt) {
-    return dashboard;
-  }
-
-  const elapsedSeconds = Math.max(
-    0,
-    Math.floor((nowTimestamp - new Date(lastUpdatedAt).getTime()) / 1000)
-  );
-
-  if (elapsedSeconds <= 0) {
-    return dashboard;
-  }
-
-  const currentUtcDate = new Date(nowTimestamp).toISOString().slice(0, 10);
-  const currentUtcHour = new Date(nowTimestamp).getUTCHours();
-
-  return {
-    ...dashboard,
-    scopes: {
-      today: applyScopeLiveVoice(dashboard.scopes?.today, elapsedSeconds, {
-        currentHour: currentUtcHour
-      }),
-      history: dashboard.selectedDate === currentUtcDate
-        ? applyScopeLiveVoice(dashboard.scopes?.history, elapsedSeconds, {
-          currentHour: currentUtcHour
-        })
-        : dashboard.scopes?.history,
-      lifetime: applyScopeLiveVoice(dashboard.scopes?.lifetime, elapsedSeconds)
-    }
-  };
-}
-
 function getMonthToken(dateValue) {
   return dateValue ? dateValue.slice(0, 7) : new Date().toISOString().slice(0, 7);
 }
@@ -173,6 +90,14 @@ function ChannelIntro({ channelName, description }) {
       </div>
     </div>
   );
+}
+
+function UserBrandGlyph({ user }) {
+  if (user?.avatar_url) {
+    return <img alt="" className="brand-glyph brand-glyph-image" src={user.avatar_url} />;
+  }
+
+  return <div className="brand-glyph">D</div>;
 }
 
 function FeatureSidebar({ activeChannel, onSelectChannel }) {
@@ -200,19 +125,19 @@ function ScopeMetrics({ scope, detail }) {
   return (
     <section className="metric-grid">
       <MetricCard
+        detail={detail}
         label="Messages"
         value={scope.summary.totalMessages}
-        detail={detail}
       />
       <MetricCard
+        detail={detail}
         label="Voice time"
         value={formatVoiceSeconds(scope.summary.totalVoiceSeconds)}
-        detail={detail}
       />
       <MetricCard
+        detail={`${scope.summary.mostActiveChannelCount} tracked events`}
         label="Most active channel"
         value={scope.summary.mostActiveChannelName || "N/A"}
-        detail={`${scope.summary.mostActiveChannelCount} tracked events`}
       />
     </section>
   );
@@ -229,7 +154,6 @@ export function DashboardPage() {
     loading: true,
     authenticated: true,
     user: null,
-    guilds: [],
     botInstallUrl: null,
     dashboard: null,
     reminders: [],
@@ -257,10 +181,10 @@ export function DashboardPage() {
 
     async function load() {
       try {
-        const [{ user, guilds, botInstallUrl }, dashboard, { reminders }] = await Promise.all([
+        const [{ user, botInstallUrl }, dashboard, remindersResponse] = await Promise.all([
           authApi.getCurrentUser(),
           analyticsApi.getDashboard(selectedDate),
-          remindersApi.list()
+          remindersApi.list().catch(() => ({ reminders: [] }))
         ]);
 
         if (!active) {
@@ -279,10 +203,9 @@ export function DashboardPage() {
           loading: false,
           authenticated: true,
           user,
-          guilds: Array.isArray(guilds) ? guilds : [],
           botInstallUrl: botInstallUrl || null,
           dashboard,
-          reminders,
+          reminders: Array.isArray(remindersResponse?.reminders) ? remindersResponse.reminders : [],
           error: null,
           lastUpdatedAt: new Date().toISOString()
         });
@@ -296,7 +219,6 @@ export function DashboardPage() {
             loading: false,
             authenticated: false,
             user: null,
-            guilds: [],
             botInstallUrl: null,
             dashboard: null,
             reminders: [],
@@ -331,7 +253,12 @@ export function DashboardPage() {
       window.removeEventListener("focus", load);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [selectedDate]);
+  }, [selectedDate, visibleMonth]);
+
+  const dashboard = useMemo(
+    () => applyLiveVoiceProgress(state.dashboard, state.lastUpdatedAt, nowTimestamp),
+    [state.dashboard, state.lastUpdatedAt, nowTimestamp]
+  );
 
   async function handleCreateReminder(payload) {
     setCreatingReminder(true);
@@ -346,11 +273,6 @@ export function DashboardPage() {
       setCreatingReminder(false);
     }
   }
-
-  const dashboard = useMemo(
-    () => applyLiveVoiceProgress(state.dashboard, state.lastUpdatedAt, nowTimestamp),
-    [state.dashboard, state.lastUpdatedAt, nowTimestamp]
-  );
 
   if (state.loading) {
     return <div className="shell"><div className="hero-card">Loading Disclytics...</div></div>;
@@ -404,117 +326,137 @@ export function DashboardPage() {
   const lifetimeScope = dashboard.scopes.lifetime;
   const activeChannelMeta = FEATURE_CHANNELS.find((channel) => channel.id === activeChannel) || FEATURE_CHANNELS[0];
 
-  function renderChannelContent() {
-    if (activeChannel === "today") {
-      return (
-        <>
-          <ChannelIntro
-            channelName={activeChannelMeta.label}
-            description="Here is everything Disclytics has tracked for you today so far, including your current live voice time."
+  function renderTodayChannel() {
+    return (
+      <>
+        <ChannelIntro
+          channelName={activeChannelMeta.label}
+          description="Here is everything Disclytics has tracked for you today so far, including your current live voice time."
+        />
+        <ScopeMetrics detail={`Today | ${dashboard.todayDate}`} scope={todayScope} />
+        <section className="dashboard-grid analytics-primary-grid">
+          <HourlyUsageChart
+            data={todayScope.hourlyBreakdown}
+            selectedDate={dashboard.todayDate}
           />
-          <ScopeMetrics detail={`Today | ${dashboard.todayDate}`} scope={todayScope} />
-          <section className="dashboard-grid analytics-primary-grid">
-            <HourlyUsageChart
-              data={todayScope.hourlyBreakdown}
-              selectedDate={dashboard.todayDate}
-            />
-            <LeaderboardPanel
-              chatChannels={todayScope.leaderboards.chatChannels}
-              viewLabel="Today"
-              voiceChannels={todayScope.leaderboards.voiceChannels}
-            />
-          </section>
-          <ActivityDetailsPanel
-            recentMessages={todayScope.recentMessages}
-            recentVoiceSessions={todayScope.recentVoiceSessions}
+          <LeaderboardPanel
+            chatChannels={todayScope.leaderboards.chatChannels}
+            viewLabel="Today"
+            voiceChannels={todayScope.leaderboards.voiceChannels}
           />
-        </>
-      );
-    }
+        </section>
+        <ActivityDetailsPanel
+          recentMessages={todayScope.recentMessages}
+          recentVoiceSessions={todayScope.recentVoiceSessions}
+        />
+      </>
+    );
+  }
 
-    if (activeChannel === "history") {
-      return (
-        <>
-          <ChannelIntro
-            channelName={activeChannelMeta.label}
-            description="Pick a date from the calendar and Disclytics will load that day's tracked voice and message activity."
+  function renderHistoryChannel() {
+    return (
+      <>
+        <ChannelIntro
+          channelName={activeChannelMeta.label}
+          description="Pick a date from the calendar and Disclytics will load that day's tracked voice and message activity."
+        />
+        <section className="dashboard-grid history-grid">
+          <HistoryCalendar
+            availableDates={dashboard.availableDates}
+            onChangeMonth={(date) => setVisibleMonth(date.toISOString().slice(0, 7))}
+            onSelectDate={(date) => {
+              setSelectedDate(date);
+              setVisibleMonth(getMonthToken(date));
+            }}
+            selectedDate={dashboard.selectedDate}
+            visibleMonth={visibleMonth}
           />
-          <section className="dashboard-grid history-grid">
-            <HistoryCalendar
-              availableDates={dashboard.availableDates}
-              onChangeMonth={(date) => setVisibleMonth(date.toISOString().slice(0, 7))}
-              onSelectDate={(date) => {
-                setSelectedDate(date);
-                setVisibleMonth(getMonthToken(date));
-              }}
-              selectedDate={dashboard.selectedDate}
-              visibleMonth={visibleMonth}
-            />
-            <section className="panel history-summary-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Selected date</p>
-                  <p className="panel-title">{dashboard.selectedDate}</p>
-                </div>
+          <section className="panel history-summary-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Selected date</p>
+                <p className="panel-title">{dashboard.selectedDate}</p>
               </div>
-              <p className="chart-copy">
-                Only dates with tracked data are clickable. Change the month and pick a valid date to load its history.
-              </p>
-              <ScopeMetrics detail={`History | ${dashboard.selectedDate}`} scope={historyScope} />
-            </section>
+            </div>
+            <p className="chart-copy">
+              Only dates with tracked data are clickable. Change the month and pick a valid date to load its history.
+            </p>
+            <ScopeMetrics detail={`History | ${dashboard.selectedDate}`} scope={historyScope} />
           </section>
-          <section className="dashboard-grid analytics-primary-grid">
-            <HourlyUsageChart
-              data={historyScope.hourlyBreakdown}
-              selectedDate={dashboard.selectedDate}
-            />
-            <LeaderboardPanel
-              chatChannels={historyScope.leaderboards.chatChannels}
-              viewLabel={`History | ${dashboard.selectedDate}`}
-              voiceChannels={historyScope.leaderboards.voiceChannels}
-            />
-          </section>
-          <ActivityDetailsPanel
-            recentMessages={historyScope.recentMessages}
-            recentVoiceSessions={historyScope.recentVoiceSessions}
+        </section>
+        <section className="dashboard-grid analytics-primary-grid">
+          <HourlyUsageChart
+            data={historyScope.hourlyBreakdown}
+            selectedDate={dashboard.selectedDate}
           />
-        </>
-      );
-    }
+          <LeaderboardPanel
+            chatChannels={historyScope.leaderboards.chatChannels}
+            viewLabel={`History | ${dashboard.selectedDate}`}
+            voiceChannels={historyScope.leaderboards.voiceChannels}
+          />
+        </section>
+        <ActivityDetailsPanel
+          recentMessages={historyScope.recentMessages}
+          recentVoiceSessions={historyScope.recentVoiceSessions}
+        />
+      </>
+    );
+  }
 
-    if (activeChannel === "lifetime") {
-      return (
-        <>
-          <ChannelIntro
-            channelName={activeChannelMeta.label}
-            description="This combines all tracked Disclytics history, including today, so you can see long-term patterns and channel leaders."
+  function renderLifetimeChannel() {
+    return (
+      <>
+        <ChannelIntro
+          channelName={activeChannelMeta.label}
+          description="This combines all tracked Disclytics history, including today, so you can compare your engagement against other tracked users in your shared servers."
+        />
+        <EngagementKpiGrid
+          summary={lifetimeScope.summary}
+          trackedDayCount={lifetimeScope.comparison?.trackedDayCount}
+          trackedStartDate={dashboard.trackedRange.firstActivityDate}
+        />
+        <section className="dashboard-grid engagement-scatter-grid">
+          <EngagementScatterChart
+            description="Each bubble is a tracked user from the servers you share with the bot. Bubble size reflects overall engagement, and the quadrant lines split the crowd into behavior groups."
+            points={lifetimeScope.comparison?.peers?.lifetime || []}
+            title="Lifetime engagement map"
+            xKey="totalVoiceSeconds"
+            xLabel="Total voice time"
+            yKey="totalMessages"
+            yLabel="Total messages"
           />
-          <ScopeMetrics
-            detail={`Since ${dashboard.trackedRange.firstActivityDate || dashboard.todayDate}`}
-            scope={lifetimeScope}
+          <EngagementScatterChart
+            averageMode
+            description={`This view averages the last ${lifetimeScope.comparison?.recentWindowDays || 7} days so you can spot current engagement habits, not just all-time volume.`}
+            points={lifetimeScope.comparison?.peers?.daily || []}
+            title="Recent daily engagement map"
+            xKey="avgVoiceSecondsPerDay"
+            xLabel="Avg voice time per day"
+            yKey="avgMessagesPerDay"
+            yLabel="Avg messages per day"
           />
-          <section className="dashboard-grid analytics-primary-grid">
-            <VoiceTrendChart
-              data={lifetimeScope.trend}
-              trackedStartDate={dashboard.trackedRange.firstActivityDate}
-            />
-            <LeaderboardPanel
-              chatChannels={lifetimeScope.leaderboards.chatChannels}
-              viewLabel="Lifetime"
-              voiceChannels={lifetimeScope.leaderboards.voiceChannels}
-            />
-          </section>
-          <section className="dashboard-grid">
-            <ActivityHeatmap data={dashboard.heatmap} />
-            <ActivityDetailsPanel
-              recentMessages={lifetimeScope.recentMessages}
-              recentVoiceSessions={lifetimeScope.recentVoiceSessions}
-            />
-          </section>
-        </>
-      );
-    }
+        </section>
+        <EngagementTrendChart
+          data={lifetimeScope.trend}
+          trackedStartDate={dashboard.trackedRange.firstActivityDate}
+        />
+        <section className="dashboard-grid lifetime-secondary-grid">
+          <LeaderboardPanel
+            chatChannels={lifetimeScope.leaderboards.chatChannels}
+            viewLabel="Lifetime"
+            voiceChannels={lifetimeScope.leaderboards.voiceChannels}
+          />
+          <ActivityHeatmap data={dashboard.heatmap} />
+        </section>
+        <ActivityDetailsPanel
+          recentMessages={lifetimeScope.recentMessages}
+          recentVoiceSessions={lifetimeScope.recentVoiceSessions}
+        />
+      </>
+    );
+  }
 
+  function renderReminderChannel() {
     return (
       <>
         <ChannelIntro
@@ -530,14 +472,32 @@ export function DashboardPage() {
     );
   }
 
+  function renderChannelContent() {
+    if (activeChannel === "today") {
+      return renderTodayChannel();
+    }
+
+    if (activeChannel === "history") {
+      return renderHistoryChannel();
+    }
+
+    if (activeChannel === "lifetime") {
+      return renderLifetimeChannel();
+    }
+
+    return renderReminderChannel();
+  }
+
   return (
     <div className="discord-app">
       <nav className="app-navbar">
         <div className="brand-lockup">
-          <div className="brand-glyph">D</div>
+          <UserBrandGlyph user={state.user} />
           <div>
             <p className="eyebrow">Disclytics</p>
-            <h1 className="brand-title">{state.user?.global_name || state.user?.username}</h1>
+            <h1 className="brand-title">
+              {state.user?.global_name || state.user?.username || "Disclytics User"}
+            </h1>
           </div>
         </div>
         <div className="nav-actions">
@@ -547,7 +507,7 @@ export function DashboardPage() {
             onClick={() => setTheme((currentTheme) => currentTheme === "dark" ? "light" : "dark")}
             type="button"
           >
-              {theme === "dark" ? <FiSun aria-hidden="true" /> : <FiMoon aria-hidden="true" />}
+            {theme === "dark" ? <FiSun aria-hidden="true" /> : <FiMoon aria-hidden="true" />}
           </button>
           {state.botInstallUrl ? (
             <a

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   Area,
   AreaChart,
@@ -32,7 +33,7 @@ function getSafeUpperBound(dataKey) {
   };
 }
 
-export function HourlyUsageChart({ data, selectedDate }) {
+export const HourlyUsageChart = memo(function HourlyUsageChart({ data, selectedDate }) {
   const chartData = (data || []).map((item) => ({
     ...item,
     displayHour: item.hourOfDay + 1,
@@ -154,4 +155,4 @@ export function HourlyUsageChart({ data, selectedDate }) {
       </div>
     </section>
   );
-}
+});

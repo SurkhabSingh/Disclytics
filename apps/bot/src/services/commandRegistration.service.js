@@ -1,8 +1,12 @@
+const { createReminderCommand } = require("../commands/remind");
 const { createStatsCommand } = require("../commands/stats");
 const { env } = require("../config/env");
 
 async function registerSlashCommands(client, logger) {
-  const commands = [createStatsCommand().toJSON()];
+  const commands = [
+    createStatsCommand().toJSON(),
+    createReminderCommand().toJSON()
+  ];
 
   if (env.DISCORD_COMMAND_GUILD_ID) {
     const guild = await client.guilds.fetch(env.DISCORD_COMMAND_GUILD_ID);

@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 function formatVoiceSeconds(seconds) {
   const totalMinutes = Math.round((seconds || 0) / 60);
   const hours = Math.floor(totalMinutes / 60);
@@ -50,7 +52,7 @@ function ChatChannelList({ channels }) {
   );
 }
 
-export function LeaderboardPanel({ chatChannels, voiceChannels, viewLabel }) {
+export const LeaderboardPanel = memo(function LeaderboardPanel({ chatChannels, voiceChannels, viewLabel }) {
   return (
     <section className="panel">
       <div className="panel-header">
@@ -71,4 +73,4 @@ export function LeaderboardPanel({ chatChannels, voiceChannels, viewLabel }) {
       </div>
     </section>
   );
-}
+});

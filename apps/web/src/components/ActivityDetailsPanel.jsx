@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 
 function formatTimestamp(value) {
   if (!value) {
@@ -96,7 +96,7 @@ function VoiceList({ items }) {
   );
 }
 
-export function ActivityDetailsPanel({ recentMessages, recentVoiceSessions }) {
+export const ActivityDetailsPanel = memo(function ActivityDetailsPanel({ recentMessages, recentVoiceSessions }) {
   const [activeTab, setActiveTab] = useState("voice");
 
   return (
@@ -132,4 +132,4 @@ export function ActivityDetailsPanel({ recentMessages, recentVoiceSessions }) {
       )}
     </section>
   );
-}
+});

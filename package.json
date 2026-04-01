@@ -14,6 +14,8 @@
     "local:db:start": "powershell -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 start",
     "local:db:stop": "powershell -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 stop",
     "local:db:status": "powershell -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 status",
+    "local:db:reset-data": "powershell -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 reset-data",
+    "local:db:reset-analytics": "powershell -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 reset-analytics",
     "lint": "npm --workspaces --if-present run lint",
     "start:api": "npm --workspace apps/api run start",
     "start:bot": "npm --workspace apps/bot run start",

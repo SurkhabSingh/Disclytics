@@ -1,3 +1,4 @@
+const { handleReminderCommand } = require("../commands/remind");
 const { handleStatsCommand } = require("../commands/stats");
 
 function createInteractionCreateHandler({ backendClient }) {
@@ -8,6 +9,11 @@ function createInteractionCreateHandler({ backendClient }) {
 
     if (interaction.commandName === "stats") {
       await handleStatsCommand(interaction, backendClient);
+      return;
+    }
+
+    if (interaction.commandName === "remind") {
+      await handleReminderCommand(interaction, backendClient);
     }
   };
 }

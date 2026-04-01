@@ -410,6 +410,167 @@ async function getRecentVoiceSessions(client, userId, options = {}) {
   return rows;
 }
 
+async function getPeerLifetimeEngagement(client, viewerUserId) {
+  const { rows } = await client.query(
+    `
+      WITH tracked_guilds AS (
+        SELECT ug.discord_guild_id
+        FROM user_guilds ug
+        JOIN guilds g
+          ON g.discord_guild_id = ug.discord_guild_id
+        WHERE ug.discord_user_id = $1
+          AND g.bot_present = TRUE
+      ),
+      message_totals AS (
+        SELECT
+          e.discord_user_id,
+          COUNT(*)::INTEGER AS total_messages
+        FROM events e
+        JOIN tracked_guilds tg
+          ON tg.discord_guild_id = e.discord_guild_id
+        WHERE e.type = 'message'
+        GROUP BY e.discord_user_id
+      ),
+      voice_totals AS (
+        SELECT
+          vs.discord_user_id,
+          COALESCE(SUM(
+            GREATEST(
+              0,
+              EXTRACT(EPOCH FROM (COALESCE(vs.end_time, NOW()) - vs.start_time))
+            )
+          ), 0)::INTEGER AS total_voice_seconds
+        FROM voice_sessions vs
+        JOIN tracked_guilds tg
+          ON tg.discord_guild_id = vs.discord_guild_id
+        GROUP BY vs.discord_user_id
+      ),
+      peer_users AS (
+        SELECT discord_user_id FROM message_totals
+        UNION
+        SELECT discord_user_id FROM voice_totals
+      )
+      SELECT
+        pu.discord_user_id AS user_id,
+        COALESCE(NULLIF(u.global_name, ''), NULLIF(u.username, ''), pu.discord_user_id) AS display_name,
+        COALESCE(mt.total_messages, 0)::INTEGER AS total_messages,
+        COALESCE(vt.total_voice_seconds, 0)::INTEGER AS total_voice_seconds
+      FROM peer_users pu
+      LEFT JOIN users u
+        ON u.discord_user_id = pu.discord_user_id
+      LEFT JOIN message_totals mt
+        ON mt.discord_user_id = pu.discord_user_id
+      LEFT JOIN voice_totals vt
+        ON vt.discord_user_id = pu.discord_user_id
+      ORDER BY
+        (COALESCE(mt.total_messages, 0) + (COALESCE(vt.total_voice_seconds, 0) / 600.0)) DESC,
+        display_name ASC
+    `,
+    [viewerUserId]
+  );
+
+  return rows;
+}
+
+async function getPeerRecentDailyEngagement(client, viewerUserId, windowDays = 7) {
+  const safeWindowDays = Math.max(1, Number(windowDays || 7));
+  const { rows } = await client.query(
+    `
+      WITH tracked_guilds AS (
+        SELECT ug.discord_guild_id
+        FROM user_guilds ug
+        JOIN guilds g
+          ON g.discord_guild_id = ug.discord_guild_id
+        WHERE ug.discord_user_id = $1
+          AND g.bot_present = TRUE
+      ),
+      peer_users AS (
+        SELECT DISTINCT e.discord_user_id
+        FROM events e
+        JOIN tracked_guilds tg
+          ON tg.discord_guild_id = e.discord_guild_id
+        UNION
+        SELECT DISTINCT vs.discord_user_id
+        FROM voice_sessions vs
+        JOIN tracked_guilds tg
+          ON tg.discord_guild_id = vs.discord_guild_id
+      ),
+      day_series AS (
+        SELECT generate_series(
+          CURRENT_DATE - (($2::INTEGER - 1) * INTERVAL '1 day'),
+          CURRENT_DATE,
+          INTERVAL '1 day'
+        )::DATE AS stat_date
+      ),
+      user_days AS (
+        SELECT
+          pu.discord_user_id,
+          ds.stat_date,
+          ds.stat_date::TIMESTAMPTZ AS day_start,
+          (ds.stat_date + INTERVAL '1 day')::TIMESTAMPTZ AS day_end
+        FROM peer_users pu
+        CROSS JOIN day_series ds
+      ),
+      message_daily AS (
+        SELECT
+          e.discord_user_id,
+          DATE(e.occurred_at) AS stat_date,
+          COUNT(*)::INTEGER AS total_messages
+        FROM events e
+        JOIN tracked_guilds tg
+          ON tg.discord_guild_id = e.discord_guild_id
+        WHERE e.type = 'message'
+          AND e.occurred_at >= CURRENT_DATE - (($2::INTEGER - 1) * INTERVAL '1 day')
+        GROUP BY e.discord_user_id, DATE(e.occurred_at)
+      ),
+      voice_daily AS (
+        SELECT
+          ud.discord_user_id,
+          ud.stat_date,
+          COALESCE(SUM(
+            GREATEST(
+              0,
+              EXTRACT(EPOCH FROM (
+                LEAST(COALESCE(vs.end_time, ud.day_end), ud.day_end) -
+                GREATEST(vs.start_time, ud.day_start)
+              ))
+            )
+          ), 0)::INTEGER AS total_voice_seconds
+        FROM user_days ud
+        LEFT JOIN voice_sessions vs
+          ON vs.discord_user_id = ud.discord_user_id
+          AND vs.discord_guild_id IN (SELECT discord_guild_id FROM tracked_guilds)
+          AND vs.start_time < ud.day_end
+          AND COALESCE(vs.end_time, ud.day_end) > ud.day_start
+        GROUP BY ud.discord_user_id, ud.stat_date
+      )
+      SELECT
+        ud.discord_user_id AS user_id,
+        COALESCE(NULLIF(u.global_name, ''), NULLIF(u.username, ''), ud.discord_user_id) AS display_name,
+        ROUND(AVG(COALESCE(md.total_messages, 0))::NUMERIC, 2) AS avg_messages_per_day,
+        ROUND(AVG(COALESCE(vd.total_voice_seconds, 0))::NUMERIC, 2) AS avg_voice_seconds_per_day,
+        COALESCE(SUM(COALESCE(md.total_messages, 0)), 0)::INTEGER AS recent_total_messages,
+        COALESCE(SUM(COALESCE(vd.total_voice_seconds, 0)), 0)::INTEGER AS recent_total_voice_seconds
+      FROM user_days ud
+      LEFT JOIN users u
+        ON u.discord_user_id = ud.discord_user_id
+      LEFT JOIN message_daily md
+        ON md.discord_user_id = ud.discord_user_id
+        AND md.stat_date = ud.stat_date
+      LEFT JOIN voice_daily vd
+        ON vd.discord_user_id = ud.discord_user_id
+        AND vd.stat_date = ud.stat_date
+      GROUP BY ud.discord_user_id, u.global_name, u.username
+      ORDER BY
+        (COALESCE(SUM(COALESCE(md.total_messages, 0)), 0) + (COALESCE(SUM(COALESCE(vd.total_voice_seconds, 0)), 0) / 600.0)) DESC,
+        display_name ASC
+    `,
+    [viewerUserId, safeWindowDays]
+  );
+
+  return rows;
+}
+
 function resolvePeriodWindow(period) {
   switch (period) {
     case "day":
@@ -535,6 +696,8 @@ module.exports = {
   getHourlyBreakdown,
   getLifetimeTrend,
   getRecentMessages,
+  getPeerLifetimeEngagement,
+  getPeerRecentDailyEngagement,
   getRecentVoiceSessions,
   getScopedSummary,
   getTopChatChannels,

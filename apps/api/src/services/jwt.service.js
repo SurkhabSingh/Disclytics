@@ -4,7 +4,7 @@ const { env } = require("../config/env");
 
 function signSessionToken(userId) {
   return jwt.sign({ sub: userId }, env.JWT_SECRET, {
-    expiresIn: "7d"
+    expiresIn: `${env.SESSION_TTL_DAYS}d`
   });
 }
 

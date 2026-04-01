@@ -5,6 +5,8 @@ const {
   getHeatmap,
   getHourlyBreakdown,
   getLifetimeTrend,
+  getPeerLifetimeEngagement,
+  getPeerRecentDailyEngagement,
   getRecentMessages,
   getRecentVoiceSessions,
   getScopedSummary,
@@ -139,6 +141,28 @@ function mapTrendRows(rows) {
   }));
 }
 
+function mapLifetimePeerRows(rows, currentUserId) {
+  return rows.map((row) => ({
+    userId: row.user_id,
+    displayName: row.display_name || row.user_id,
+    totalMessages: Number(row.total_messages || 0),
+    totalVoiceSeconds: Number(row.total_voice_seconds || 0),
+    isCurrentUser: row.user_id === currentUserId
+  }));
+}
+
+function mapDailyPeerRows(rows, currentUserId) {
+  return rows.map((row) => ({
+    userId: row.user_id,
+    displayName: row.display_name || row.user_id,
+    avgMessagesPerDay: Number(row.avg_messages_per_day || 0),
+    avgVoiceSecondsPerDay: Number(row.avg_voice_seconds_per_day || 0),
+    recentTotalMessages: Number(row.recent_total_messages || 0),
+    recentTotalVoiceSeconds: Number(row.recent_total_voice_seconds || 0),
+    isCurrentUser: row.user_id === currentUserId
+  }));
+}
+
 async function getDashboardAnalytics(userId, requestedDate) {
   const client = await pool.connect();
 
@@ -198,6 +222,9 @@ async function getDashboardAnalytics(userId, requestedDate) {
       limit: 20,
       startAt: selectedDayStartAt
     });
+    const peerLifetimeEngagement = await getPeerLifetimeEngagement(client, userId);
+    const peerRecentDailyEngagement = await getPeerRecentDailyEngagement(client, userId, 7);
+    const trackedDayCount = lifetimeTrend.length;
 
     return {
       user,
@@ -228,6 +255,14 @@ async function getDashboardAnalytics(userId, requestedDate) {
         lifetime: {
           summary: mapSummary(lifetimeSummary),
           trend: lifetimeTrend,
+          comparison: {
+            trackedDayCount,
+            recentWindowDays: 7,
+            peers: {
+              lifetime: mapLifetimePeerRows(peerLifetimeEngagement, userId),
+              daily: mapDailyPeerRows(peerRecentDailyEngagement, userId)
+            }
+          },
           leaderboards: {
             chatChannels: mapChatLeaderboard(lifetimeChatChannels),
             voiceChannels: mapVoiceLeaderboard(lifetimeVoiceChannels)

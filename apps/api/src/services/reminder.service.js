@@ -2,7 +2,7 @@ const {
   REMINDER_DELIVERY_TYPES
 } = require("@analytics-platform/shared");
 
-const { pool } = require("../db/pool");
+const { pool, withTransaction } = require("../db/pool");
 const { AppError } = require("../lib/appError");
 const { logger } = require("../lib/logger");
 const {
@@ -12,6 +12,8 @@ const {
   toggleReminder,
   updateReminderStatus
 } = require("../repositories/reminder.repository");
+const { upsertGuilds } = require("../repositories/guild.repository");
+const { getUserById, upsertUser } = require("../repositories/user.repository");
 const { sendReminderCommand } = require("./botControl.service");
 const {
   computeNextRunAt,
@@ -38,7 +40,7 @@ async function createUserReminder(userId, payload) {
       scheduleDate: payload.scheduleDate,
       scheduleDays: payload.scheduleDays,
       timezone: payload.timezone || "UTC",
-      deliveryModes: payload.deliveryModes.length
+      deliveryModes: payload.deliveryModes?.length
         ? payload.deliveryModes
         : [REMINDER_DELIVERY_TYPES.DM],
       nextRunAt
@@ -59,6 +61,53 @@ async function listUserReminders(userId) {
   } finally {
     client.release();
   }
+}
+
+async function createBotUserReminder(payload) {
+  return withTransaction(async (client) => {
+    const existingUser = await getUserById(client, payload.user.userId);
+    const timezone = payload.timezone || payload.user.timezone || existingUser?.timezone || "UTC";
+
+    await upsertUser(client, {
+      userId: payload.user.userId,
+      username: payload.user.username,
+      globalName: payload.user.globalName,
+      avatar: payload.user.avatar,
+      timezone
+    });
+
+    if (payload.guild) {
+      await upsertGuilds(client, [payload.guild], {
+        botPresent: true,
+        preserveExistingBotPresence: true
+      });
+    }
+
+    const nextRunAt = computeNextRunAt({
+      scheduleType: payload.scheduleType,
+      scheduleTime: payload.scheduleTime,
+      scheduleDate: payload.scheduleDate,
+      scheduleDays: payload.scheduleDays,
+      timezone
+    });
+
+    return createReminder(client, {
+      userId: payload.user.userId,
+      guildId: payload.guild?.guildId,
+      targetChannelId: payload.targetChannelId,
+      title: payload.title,
+      message: payload.message,
+      scheduleType: payload.scheduleType,
+      scheduleTime: payload.scheduleTime,
+      scheduleDate: payload.scheduleDate,
+      scheduleDays: payload.scheduleDays,
+      timezone,
+      deliveryModes: payload.deliveryModes?.length
+        ? payload.deliveryModes
+        : [REMINDER_DELIVERY_TYPES.DM],
+      nextRunAt
+    });
+  });
 }
 
 async function setReminderActive(userId, reminderId, active) {
@@ -116,6 +165,7 @@ async function dispatchDueReminders() {
 }
 
 module.exports = {
+  createBotUserReminder,
   createUserReminder,
   dispatchDueReminders,
   listUserReminders,

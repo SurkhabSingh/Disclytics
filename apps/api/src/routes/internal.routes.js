@@ -2,6 +2,7 @@ const { Router } = require("express");
 const { z } = require("zod");
 
 const {
+  createInternalReminder,
   getGuildUserStats,
   ingestMessage,
   reconcileVoiceSessions,
@@ -97,6 +98,20 @@ const statsSummarySchema = z.object({
   userId: z.string()
 });
 
+const reminderCreateSchema = z.object({
+  user: userSchema,
+  guild: guildSchema.optional(),
+  targetChannelId: z.string().optional(),
+  title: z.string().min(1).max(120),
+  message: z.string().min(1).max(1000),
+  scheduleType: z.enum(["once", "daily", "weekly"]),
+  scheduleTime: z.string().regex(/^\d{2}:\d{2}$/),
+  scheduleDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  scheduleDays: z.array(z.number().int().min(0).max(6)).default([]),
+  timezone: z.string().optional(),
+  deliveryModes: z.array(z.enum(["dm", "channel", "voice"])).default(["dm"])
+});
+
 const router = Router();
 
 router.use(requireInternalAuth);
@@ -111,5 +126,6 @@ router.post(
 );
 router.post("/guilds/sync", validate(guildSyncSchema), asyncHandler(syncGuildPresence));
 router.post("/analytics/guild-user-summary", validate(statsSummarySchema), asyncHandler(getGuildUserStats));
+router.post("/reminders", validate(reminderCreateSchema), asyncHandler(createInternalReminder));
 
 module.exports = router;
