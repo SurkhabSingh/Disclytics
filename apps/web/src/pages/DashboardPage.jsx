@@ -9,7 +9,7 @@ import {
   FiMic,
   FiMoon,
   FiPlus,
-  FiSun
+  FiSun,
 } from "react-icons/fi";
 
 import { analyticsApi, authApi, remindersApi } from "../api/client";
@@ -26,27 +26,44 @@ import { normalizeDashboardPayload } from "../features/analytics/dashboardModel"
 
 const THEME_STORAGE_KEY = "disclytics-theme";
 
+function syncRouteForAuthState(isAuthenticated) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const targetPath = isAuthenticated ? "/dashboard" : "/";
+  if (window.location.pathname === targetPath) {
+    return;
+  }
+
+  window.history.replaceState({}, "", targetPath);
+}
+
 const FEATURE_CHANNELS = [
   {
     id: "today",
     label: "today's activity",
-    description: "Today's activity, channels you used today, and a simple hourly graph."
+    description:
+      "Today's activity, channels you used today, and a simple hourly graph.",
   },
   {
     id: "history",
     label: "history",
-    description: "Choose a tracked date from the calendar and load that day's activity."
+    description:
+      "Choose a tracked date from the calendar and load that day's activity.",
   },
   {
     id: "lifetime",
     label: "lifetime",
-    description: "Combined historical analytics, including today, with long-term trends and leaderboards."
+    description:
+      "Combined historical analytics, including today, with long-term trends and leaderboards.",
   },
   {
     id: "reminders",
     label: "reminders",
-    description: "Create reminders and let Disclytics DM them back to you when they are due."
-  }
+    description:
+      "Create reminders and let Disclytics DM them back to you when they are due.",
+  },
 ];
 
 const LANDING_FEATURES = [
@@ -54,26 +71,30 @@ const LANDING_FEATURES = [
     id: "feature-today",
     icon: FiMic,
     title: "Track today's activity",
-    description: "See how much time you spent in voice, how many messages you sent, and which channels were active today."
+    description:
+      "See how much time you spent in voice, how many messages you sent, and which channels were active today.",
   },
   {
     id: "feature-history",
     icon: FiCalendar,
     title: "Browse historical days",
-    description: "Open any tracked date from the calendar and load the exact voice sessions, messages, and activity totals for that day."
+    description:
+      "Open any tracked date from the calendar and load the exact voice sessions, messages, and activity totals for that day.",
   },
   {
     id: "feature-lifetime",
     icon: FiMessageSquare,
     title: "Understand long-term patterns",
-    description: "Follow lifetime trends, channel leaderboards, and recurring habits across the servers where Disclytics is installed."
+    description:
+      "Follow lifetime trends, channel leaderboards, and recurring habits across the servers where Disclytics is installed.",
   },
   {
     id: "feature-reminders",
     icon: FiBell,
     title: "Schedule reminder DMs",
-    description: "Create reminders from the dashboard or Discord and let Disclytics send them back to you when they are due."
-  }
+    description:
+      "Create reminders from the dashboard or Discord and let Disclytics send them back to you when they are due.",
+  },
 ];
 
 function formatVoiceSeconds(seconds) {
@@ -91,7 +112,7 @@ function formatRefreshTime(value) {
   return `Snapshot from ${new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
-    second: "2-digit"
+    second: "2-digit",
   }).format(new Date(value))}`;
 }
 
@@ -105,11 +126,15 @@ function getInitialTheme() {
     return savedTheme;
   }
 
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 function getMonthToken(dateValue) {
-  return dateValue ? dateValue.slice(0, 7) : new Date().toISOString().slice(0, 7);
+  return dateValue
+    ? dateValue.slice(0, 7)
+    : new Date().toISOString().slice(0, 7);
 }
 
 function ChannelIntro({ channelName, description }) {
@@ -129,7 +154,13 @@ function ChannelIntro({ channelName, description }) {
 
 function UserBrandGlyph({ user }) {
   if (user?.avatar_url) {
-    return <img alt="" className="brand-glyph brand-glyph-image" src={user.avatar_url} />;
+    return (
+      <img
+        alt=""
+        className="brand-glyph brand-glyph-image"
+        src={user.avatar_url}
+      />
+    );
   }
 
   return <div className="brand-glyph">D</div>;
@@ -163,7 +194,6 @@ function LandingFeatureCard({ description, icon: Icon, title }) {
         <Icon aria-hidden="true" />
       </div>
       <div>
-        <p className="eyebrow">Feature</p>
         <p className="panel-title landing-feature-title">{title}</p>
         <p className="chart-copy landing-feature-copy">{description}</p>
       </div>
@@ -207,13 +237,21 @@ export function DashboardPage() {
     dashboard: null,
     reminders: [],
     error: null,
-    lastUpdatedAt: null
+    lastUpdatedAt: null,
   });
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (state.loading) {
+      return;
+    }
+
+    syncRouteForAuthState(state.authenticated);
+  }, [state.authenticated, state.loading]);
 
   useEffect(() => {
     let active = true;
@@ -226,11 +264,11 @@ export function DashboardPage() {
       try {
         const [{ user, botInstallUrl }, dashboardPayload] = await Promise.all([
           authApi.getCurrentUser({
-            signal: dashboardAbortController.signal
+            signal: dashboardAbortController.signal,
           }),
           analyticsApi.getDashboard(selectedDate, {
-            signal: dashboardAbortController.signal
-          })
+            signal: dashboardAbortController.signal,
+          }),
         ]);
         const dashboard = normalizeDashboardPayload(dashboardPayload);
 
@@ -238,14 +276,18 @@ export function DashboardPage() {
           return;
         }
 
-        if (dashboard?.selectedDate && dashboard.selectedDate !== selectedDate) {
+        if (
+          dashboard?.selectedDate &&
+          dashboard.selectedDate !== selectedDate
+        ) {
           setSelectedDate(dashboard.selectedDate);
         }
 
         if (dashboard?.selectedDate) {
-          setVisibleMonth((currentVisibleMonth) => (
-            currentVisibleMonth || getMonthToken(dashboard.selectedDate)
-          ));
+          setVisibleMonth(
+            (currentVisibleMonth) =>
+              currentVisibleMonth || getMonthToken(dashboard.selectedDate),
+          );
         }
 
         setState((previous) => ({
@@ -256,7 +298,7 @@ export function DashboardPage() {
           botInstallUrl: botInstallUrl || null,
           dashboard,
           error: null,
-          lastUpdatedAt: new Date().toISOString()
+          lastUpdatedAt: new Date().toISOString(),
         }));
       } catch (error) {
         if (!active) {
@@ -276,7 +318,7 @@ export function DashboardPage() {
             dashboard: null,
             reminders: [],
             error: null,
-            lastUpdatedAt: null
+            lastUpdatedAt: null,
           });
           return;
         }
@@ -284,7 +326,7 @@ export function DashboardPage() {
         setState((previous) => ({
           ...previous,
           loading: false,
-          error: previous.dashboard ? null : error.message
+          error: previous.dashboard ? null : error.message,
         }));
       }
     }
@@ -308,7 +350,7 @@ export function DashboardPage() {
     async function loadReminders() {
       try {
         const remindersResponse = await remindersApi.list({
-          signal: remindersAbortController.signal
+          signal: remindersAbortController.signal,
         });
 
         if (!active) {
@@ -317,7 +359,9 @@ export function DashboardPage() {
 
         setState((previous) => ({
           ...previous,
-          reminders: Array.isArray(remindersResponse?.reminders) ? remindersResponse.reminders : []
+          reminders: Array.isArray(remindersResponse?.reminders)
+            ? remindersResponse.reminders
+            : [],
         }));
       } catch (error) {
         if (!active || error?.name === "AbortError") {
@@ -343,7 +387,7 @@ export function DashboardPage() {
       const { reminder } = await remindersApi.create(payload);
       setState((previous) => ({
         ...previous,
-        reminders: [reminder, ...previous.reminders]
+        reminders: [reminder, ...previous.reminders],
       }));
     } finally {
       setCreatingReminder(false);
@@ -351,7 +395,11 @@ export function DashboardPage() {
   }
 
   if (state.loading) {
-    return <div className="shell"><div className="hero-card">Loading Disclytics...</div></div>;
+    return (
+      <div className="shell">
+        <div className="hero-card">Loading Disclytics...</div>
+      </div>
+    );
   }
 
   if (!state.authenticated) {
@@ -367,14 +415,30 @@ export function DashboardPage() {
           </div>
           <div className="nav-actions">
             <button
-              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              aria-label={
+                theme === "dark"
+                  ? "Switch to light theme"
+                  : "Switch to dark theme"
+              }
               className="secondary-button icon-button"
-              onClick={() => setTheme((currentTheme) => currentTheme === "dark" ? "light" : "dark")}
+              onClick={() =>
+                setTheme((currentTheme) =>
+                  currentTheme === "dark" ? "light" : "dark",
+                )
+              }
               type="button"
             >
-              {theme === "dark" ? <FiSun aria-hidden="true" /> : <FiMoon aria-hidden="true" />}
+              {theme === "dark" ? (
+                <FiSun aria-hidden="true" />
+              ) : (
+                <FiMoon aria-hidden="true" />
+              )}
             </button>
-            <a aria-label="Login with Discord" className="primary-button icon-button" href={authApi.getLoginUrl()}>
+            <a
+              aria-label="Login with Discord"
+              className="primary-button icon-button"
+              href={authApi.getLoginUrl()}
+            >
               <FiLogIn aria-hidden="true" />
             </a>
           </div>
@@ -384,11 +448,17 @@ export function DashboardPage() {
             <p className="eyebrow">Disclytics</p>
             <h1>Know who is active in your Discord without breaking trust.</h1>
             <p>
-              Disclytics gives server-scoped analytics for messages, voice sessions, reminders, and channel activity.
-              It only tracks what happens inside servers where the bot is actually installed.
+              Disclytics gives server-scoped analytics for messages, voice
+              sessions, reminders, and channel activity. It only tracks what
+              happens inside servers where the bot is actually installed.
             </p>
             <div className="landing-cta-row">
-              <a className="primary-button" href={authApi.getInstallUrl()} rel="noreferrer" target="_blank">
+              <a
+                className="primary-button"
+                href={authApi.getInstallUrl()}
+                rel="noreferrer"
+                target="_blank"
+              >
                 Add to Discord
               </a>
               <a className="secondary-button" href="#features">
@@ -398,11 +468,17 @@ export function DashboardPage() {
           </div>
           <div className="action-panel landing-side-note">
             <p className="eyebrow">Built for clarity</p>
-            <p className="panel-title">No global tracking. No self-bots. No user tokens.</p>
-            <p className="chart-copy">
-              Disclytics stays inside Discord’s rules and focuses on the servers that intentionally install the bot.
+            <p className="panel-title">
+              No global tracking. No self-bots. No user tokens.
             </p>
-            <a className="secondary-button landing-login-link" href={authApi.getLoginUrl()}>
+            <p className="chart-copy">
+              Disclytics stays inside Discord’s rules and focuses on the servers
+              that intentionally install the bot.
+            </p>
+            <a
+              className="secondary-button landing-login-link"
+              href={authApi.getLoginUrl()}
+            >
               Sign in to your dashboard
               <FiArrowRight aria-hidden="true" />
             </a>
@@ -412,7 +488,9 @@ export function DashboardPage() {
         <section className="landing-features" id="features">
           <div className="landing-section-heading">
             <p className="eyebrow">Features</p>
-            <p className="panel-title landing-section-title">Everything Disclytics gives your server in one simple flow</p>
+            <p className="panel-title landing-section-title">
+              Everything Disclytics gives your server in one simple flow
+            </p>
           </div>
           <div className="landing-feature-grid">
             {LANDING_FEATURES.map((feature) => (
@@ -430,13 +508,19 @@ export function DashboardPage() {
   }
 
   if (state.error || !dashboard) {
-    return <div className="shell"><div className="hero-card">Failed to load dashboard: {state.error}</div></div>;
+    return (
+      <div className="shell">
+        <div className="hero-card">Failed to load dashboard: {state.error}</div>
+      </div>
+    );
   }
 
   const todayScope = dashboard.scopes.today;
   const historyScope = dashboard.scopes.history;
   const lifetimeScope = dashboard.scopes.lifetime;
-  const activeChannelMeta = FEATURE_CHANNELS.find((channel) => channel.id === activeChannel) || FEATURE_CHANNELS[0];
+  const activeChannelMeta =
+    FEATURE_CHANNELS.find((channel) => channel.id === activeChannel) ||
+    FEATURE_CHANNELS[0];
 
   function renderTodayChannel() {
     return (
@@ -445,7 +529,10 @@ export function DashboardPage() {
           channelName={activeChannelMeta.label}
           description="Here is everything Disclytics has tracked for you today so far, including your voice time so far."
         />
-        <ScopeMetrics detail={`Today | ${dashboard.todayDate}`} scope={todayScope} />
+        <ScopeMetrics
+          detail={`Today | ${dashboard.todayDate}`}
+          scope={todayScope}
+        />
         <section className="dashboard-grid analytics-primary-grid">
           <HourlyUsageChart
             data={todayScope.hourlyBreakdown}
@@ -475,7 +562,9 @@ export function DashboardPage() {
         <section className="dashboard-grid history-grid">
           <HistoryCalendar
             availableDates={dashboard.availableDates}
-            onChangeMonth={(date) => setVisibleMonth(date.toISOString().slice(0, 7))}
+            onChangeMonth={(date) =>
+              setVisibleMonth(date.toISOString().slice(0, 7))
+            }
             onSelectDate={(date) => {
               setSelectedDate(date);
               setVisibleMonth(getMonthToken(date));
@@ -491,9 +580,13 @@ export function DashboardPage() {
               </div>
             </div>
             <p className="chart-copy">
-              Only dates with tracked data are clickable. Change the month and pick a valid date to load its history.
+              Only dates with tracked data are clickable. Change the month and
+              pick a valid date to load its history.
             </p>
-            <ScopeMetrics detail={`History | ${dashboard.selectedDate}`} scope={historyScope} />
+            <ScopeMetrics
+              detail={`History | ${dashboard.selectedDate}`}
+              scope={historyScope}
+            />
           </section>
         </section>
         <section className="dashboard-grid analytics-primary-grid">
@@ -587,18 +680,32 @@ export function DashboardPage() {
           <div>
             <p className="eyebrow">Disclytics</p>
             <h1 className="brand-title">
-              {state.user?.global_name || state.user?.username || "Disclytics User"}
+              {state.user?.global_name ||
+                state.user?.username ||
+                "Disclytics User"}
             </h1>
           </div>
         </div>
         <div className="nav-actions">
           <button
-            aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            aria-label={
+              theme === "dark"
+                ? "Switch to light theme"
+                : "Switch to dark theme"
+            }
             className="secondary-button icon-button"
-            onClick={() => setTheme((currentTheme) => currentTheme === "dark" ? "light" : "dark")}
+            onClick={() =>
+              setTheme((currentTheme) =>
+                currentTheme === "dark" ? "light" : "dark",
+              )
+            }
             type="button"
           >
-            {theme === "dark" ? <FiSun aria-hidden="true" /> : <FiMoon aria-hidden="true" />}
+            {theme === "dark" ? (
+              <FiSun aria-hidden="true" />
+            ) : (
+              <FiMoon aria-hidden="true" />
+            )}
           </button>
           {state.botInstallUrl ? (
             <a
@@ -614,7 +721,12 @@ export function DashboardPage() {
           <button
             aria-label="Logout"
             className="secondary-button icon-button"
-            onClick={() => authApi.logout().then(() => window.location.reload())}
+            onClick={() =>
+              authApi.logout().then(() => {
+                syncRouteForAuthState(false);
+                window.location.reload();
+              })
+            }
             type="button"
           >
             <FiLogOut aria-hidden="true" />
@@ -623,20 +735,25 @@ export function DashboardPage() {
       </nav>
 
       <div className="workspace-shell">
-        <FeatureSidebar activeChannel={activeChannel} onSelectChannel={setActiveChannel} />
+        <FeatureSidebar
+          activeChannel={activeChannel}
+          onSelectChannel={setActiveChannel}
+        />
 
         <main className="channel-stage">
           <header className="channel-header">
             <div>
               <p className="channel-title">#{activeChannelMeta.label}</p>
-              <p className="channel-subtitle">{activeChannelMeta.description}</p>
+              <p className="channel-subtitle">
+                {activeChannelMeta.description}
+              </p>
             </div>
-            <p className="toolbar-caption">{formatRefreshTime(state.lastUpdatedAt)}</p>
+            <p className="toolbar-caption">
+              {formatRefreshTime(state.lastUpdatedAt)}
+            </p>
           </header>
 
-          <div className="channel-scroll">
-            {renderChannelContent()}
-          </div>
+          <div className="channel-scroll">{renderChannelContent()}</div>
         </main>
       </div>
     </div>

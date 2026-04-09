@@ -589,7 +589,9 @@ button {
 .metric-card {
   padding: 22px;
 }
-
+.panel-title.landing-feature-title {
+  font-size: 1.2rem;
+}
 .metric-label {
   margin: 0;
   color: var(--muted);

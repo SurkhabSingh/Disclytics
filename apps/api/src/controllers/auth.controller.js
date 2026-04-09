@@ -17,13 +17,24 @@ const {
 
 const BOT_INVITE_PERMISSIONS = "3214336";
 
+function isCrossOriginFrontendDeployment() {
+  try {
+    return new URL(env.WEB_APP_URL).origin !== new URL(env.DISCORD_REDIRECT_URI).origin;
+  } catch {
+    return false;
+  }
+}
+
 function getSessionCookieOptions() {
+  const crossOriginFrontend = isCrossOriginFrontendDeployment();
   const secure = env.SESSION_COOKIE_SECURE === "auto"
-    ? env.WEB_APP_URL.startsWith("https://")
+    ? (env.WEB_APP_URL.startsWith("https://") || env.DISCORD_REDIRECT_URI.startsWith("https://"))
     : env.SESSION_COOKIE_SECURE === "true";
-  const sameSite = secure && env.SESSION_COOKIE_SAME_SITE === "none"
-    ? "none"
-    : (env.SESSION_COOKIE_SAME_SITE === "none" ? "lax" : env.SESSION_COOKIE_SAME_SITE);
+  let sameSite = crossOriginFrontend ? "none" : env.SESSION_COOKIE_SAME_SITE;
+
+  if (sameSite === "none" && !secure) {
+    sameSite = "lax";
+  }
 
   return {
     domain: env.SESSION_COOKIE_DOMAIN || undefined,
