@@ -58,8 +58,9 @@ function createControlServer(client) {
     res.json(result);
   }));
 
-  return app.listen(env.BOT_CONTROL_PORT, () => {
+  return app.listen(env.BOT_CONTROL_PORT, env.BOT_CONTROL_HOST, () => {
     logger.info("Bot control server listening", {
+      host: env.BOT_CONTROL_HOST,
       port: env.BOT_CONTROL_PORT
     });
   });
