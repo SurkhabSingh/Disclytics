@@ -8,6 +8,7 @@ vi.mock("../src/api/client", () => ({
     getDashboard: vi.fn()
   },
   authApi: {
+    getInstallUrl: () => "/install",
     getCurrentUser: vi.fn(),
     getLoginUrl: () => "/login",
     logout: () => Promise.resolve()
@@ -41,14 +42,6 @@ function createDashboardFixture() {
         }
       },
       lifetime: {
-        comparison: {
-          peers: {
-            daily: [],
-            lifetime: []
-          },
-          recentWindowDays: 7,
-          trackedDayCount: 1
-        },
         leaderboards: { chatChannels: [], voiceChannels: [] },
         recentMessages: [],
         recentVoiceSessions: [],
@@ -106,8 +99,8 @@ describe("DashboardPage", () => {
 
     expect(await screen.findByText("Disclytics Tester")).toBeInTheDocument();
     expect(screen.getAllByText("#today's activity")).toHaveLength(2);
-    expect(screen.getByText("Live activity, channels you used today, and a simple hourly graph.")).toBeInTheDocument();
-    expect(screen.getByText("Here is everything Disclytics has tracked for you today so far, including your current live voice time.")).toBeInTheDocument();
+    expect(screen.getByText("Today's activity, channels you used today, and a simple hourly graph.")).toBeInTheDocument();
+    expect(screen.getByText("Here is everything Disclytics has tracked for you today so far, including your voice time so far.")).toBeInTheDocument();
   });
 
   it("renders the login state when unauthenticated", async () => {
@@ -118,6 +111,8 @@ describe("DashboardPage", () => {
     render(<DashboardPage />);
 
     expect(await screen.findByText("Discord activity, made honest.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add to Discord" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "See features" })).toBeInTheDocument();
     expect(screen.getByLabelText("Login with Discord")).toBeInTheDocument();
   });
 });

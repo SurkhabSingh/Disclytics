@@ -1,3 +1,5 @@
+const VOICE_STATE_RECONCILE_INTERVAL_MS = 30_000;
+
 function serializeUser(user) {
   return {
     userId: user.id,
@@ -22,7 +24,14 @@ function serializeGuild(guild) {
   };
 }
 
+function createSessionKey(guildId, userId) {
+  return `${guildId}:${userId}`;
+}
+
 function createVoiceTrackingService({ backendClient, logger, voiceSessionStore }) {
+  let reconcileIntervalId = null;
+  let reconcileInFlight = false;
+
   async function startSession(member, channel, startTime) {
     const idempotencyKey = `voice:${member.guild.id}:${member.id}:${startTime}:start`;
     logger.info("Starting tracked voice session", {
@@ -96,23 +105,14 @@ function createVoiceTrackingService({ backendClient, logger, voiceSessionStore }
     }
   }
 
-  async function reconcileFromGateway(client) {
-    const observedAt = new Date().toISOString();
+  function collectObservedVoiceSessions(client) {
     const sessions = [];
-    voiceSessionStore.clear();
 
     client.guilds.cache.forEach((guild) => {
       guild.voiceStates.cache.forEach((state) => {
         if (!state.channelId || !state.member || state.member.user.bot) {
           return;
         }
-
-        voiceSessionStore.set({
-          guildId: guild.id,
-          userId: state.member.id,
-          channelId: state.channelId,
-          startTime: observedAt
-        });
 
         sessions.push({
           user: serializeUser(state.member.user),
@@ -122,14 +122,95 @@ function createVoiceTrackingService({ backendClient, logger, voiceSessionStore }
       });
     });
 
+    return sessions;
+  }
+
+  function syncVoiceStoreFromObservedSessions(observedSessions, observedAt) {
+    const observedKeys = new Set();
+
+    for (const session of observedSessions) {
+      const key = createSessionKey(session.guild.guildId, session.user.userId);
+      const existingSession = voiceSessionStore.get(session.guild.guildId, session.user.userId);
+      observedKeys.add(key);
+
+      if (existingSession && existingSession.channelId === session.channel.channelId) {
+        continue;
+      }
+
+      voiceSessionStore.set({
+        guildId: session.guild.guildId,
+        userId: session.user.userId,
+        channelId: session.channel.channelId,
+        startTime: observedAt
+      });
+    }
+
+    for (const session of voiceSessionStore.all()) {
+      const key = createSessionKey(session.guildId, session.userId);
+
+      if (!observedKeys.has(key)) {
+        voiceSessionStore.delete(session.guildId, session.userId);
+      }
+    }
+  }
+
+  async function reconcileFromGateway(client, reason = "manual") {
+    if (typeof client.isReady === "function" && !client.isReady()) {
+      logger.info("Skipping voice reconciliation because the Discord client is not ready", {
+        reason
+      });
+      return;
+    }
+
+    const observedAt = new Date().toISOString();
+    const sessions = collectObservedVoiceSessions(client);
+    syncVoiceStoreFromObservedSessions(sessions, observedAt);
+
     await backendClient.post("/api/internal/voice-sessions/reconcile", {
       observedAt,
       sessions
     });
     logger.info("Reconciled live voice state from gateway", {
       activeSessionCount: sessions.length,
-      observedAt
+      observedAt,
+      reason
     });
+  }
+
+  function startBackgroundSync(client) {
+    if (reconcileIntervalId) {
+      return;
+    }
+
+    const tick = async () => {
+      if (reconcileInFlight) {
+        return;
+      }
+
+      reconcileInFlight = true;
+
+      try {
+        await reconcileFromGateway(client, "interval");
+      } catch (error) {
+        logger.error("Failed background voice reconciliation", { error });
+      } finally {
+        reconcileInFlight = false;
+      }
+    };
+
+    reconcileIntervalId = setInterval(() => {
+      void tick();
+    }, VOICE_STATE_RECONCILE_INTERVAL_MS);
+    reconcileIntervalId.unref?.();
+  }
+
+  function stopBackgroundSync() {
+    if (!reconcileIntervalId) {
+      return;
+    }
+
+    clearInterval(reconcileIntervalId);
+    reconcileIntervalId = null;
   }
 
   async function flushActiveSessions(client, reason = "bot_shutdown") {
@@ -159,7 +240,9 @@ function createVoiceTrackingService({ backendClient, logger, voiceSessionStore }
   return {
     flushActiveSessions,
     handleVoiceStateUpdate,
-    reconcileFromGateway
+    reconcileFromGateway,
+    startBackgroundSync,
+    stopBackgroundSync
   };
 }
 

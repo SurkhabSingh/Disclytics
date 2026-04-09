@@ -9,9 +9,35 @@ const { logger } = require("./lib/logger");
 const { errorHandler, notFoundHandler } = require("./middleware/errorHandler");
 const routes = require("./routes");
 
+function parseAllowedOrigins(value) {
+  return value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+function isAllowedDevelopmentOrigin(origin) {
+  if (!origin) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(origin);
+    const isLocalHost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+    const isAllowedPort = parsed.port === "4173" || parsed.port === "5173";
+
+    return parsed.protocol === "http:" && isLocalHost && isAllowedPort;
+  } catch {
+    return false;
+  }
+}
+
 function createApp() {
   const app = express();
-  const allowedOrigins = env.CORS_ALLOWED_ORIGINS.split(",").map((value) => value.trim());
+  const allowedOrigins = new Set([
+    ...parseAllowedOrigins(env.CORS_ALLOWED_ORIGINS),
+    env.WEB_APP_URL
+  ]);
 
   app.disable("x-powered-by");
   app.set("trust proxy", env.TRUST_PROXY);
@@ -31,7 +57,11 @@ function createApp() {
   app.use(
     cors({
       origin(origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (
+          !origin ||
+          allowedOrigins.has(origin) ||
+          (env.NODE_ENV !== "production" && isAllowedDevelopmentOrigin(origin))
+        ) {
           return callback(null, true);
         }
 

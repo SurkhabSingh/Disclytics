@@ -75,11 +75,11 @@ function startJobs(logger) {
   const refreshStats = createLockedJob("aggregateDailyStats", refreshRollingDailyStats, logger);
   const sendReminders = createLockedJob("dispatchReminders", dispatchDueReminders, logger);
 
-  const refreshStatsTask = cron.schedule("*/15 * * * *", refreshStats, {
+  const refreshStatsTask = cron.schedule(jobEnv.DAILY_STATS_CRON, refreshStats, {
     timezone: jobEnv.CRON_TIMEZONE
   });
 
-  const sendRemindersTask = cron.schedule("* * * * *", sendReminders, {
+  const sendRemindersTask = cron.schedule(jobEnv.REMINDER_DISPATCH_CRON, sendReminders, {
     timezone: jobEnv.CRON_TIMEZONE
   });
 

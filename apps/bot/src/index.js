@@ -46,6 +46,7 @@ async function startBot() {
 
   registerGracefulShutdown({
     cleanup: async () => {
+      voiceTrackingService.stopBackgroundSync();
       await voiceTrackingService.flushActiveSessions(client);
       await new Promise((resolve, reject) => {
         controlServer.close((error) => {

@@ -7,7 +7,8 @@ const { upsertUser } = require("../repositories/user.repository");
 const {
   listActiveVoiceSessions,
   startVoiceSession,
-  stopActiveVoiceSession
+  stopActiveVoiceSession,
+  touchActiveVoiceSession
 } = require("../repositories/voice.repository");
 
 async function ingestMessageEvent(payload) {
@@ -92,31 +93,55 @@ async function stopTrackedVoiceSession(payload) {
 async function reconcileTrackedVoiceSessions(payload) {
   return withTransaction(async (client) => {
     const activeSessions = await listActiveVoiceSessions(client);
+    const activeSessionsByKey = new Map(
+      activeSessions.map((session) => [
+        `${session.discord_guild_id}:${session.discord_user_id}`,
+        session
+      ])
+    );
     const expectedKeys = new Set(
       payload.sessions.map((session) => `${session.guild.guildId}:${session.user.userId}`)
     );
 
     const sessionsToClose = activeSessions.filter((session) => {
       const key = `${session.discord_guild_id}:${session.discord_user_id}`;
-      return !expectedKeys.has(key);
+      const expectedSession = payload.sessions.find(
+        (candidate) => `${candidate.guild.guildId}:${candidate.user.userId}` === key
+      );
+
+      if (!expectedSession) {
+        return true;
+      }
+
+      return expectedSession.channel.channelId !== session.discord_channel_id;
     });
 
     for (const session of sessionsToClose) {
+      const expectedSession = payload.sessions.find(
+        (candidate) => (
+          candidate.guild.guildId === session.discord_guild_id &&
+          candidate.user.userId === session.discord_user_id
+        )
+      );
+
       await stopActiveVoiceSession(client, {
         userId: session.discord_user_id,
         guildId: session.discord_guild_id,
         endTime: payload.observedAt,
-        reason: "reconciled_missing"
+        reason: expectedSession ? "reconciled_switch" : "reconciled_missing",
+        sessionStartTime: session.start_time
       });
     }
 
     for (const session of payload.sessions) {
       const key = `${session.guild.guildId}:${session.user.userId}`;
-      const exists = activeSessions.some(
-        (row) => `${row.discord_guild_id}:${row.discord_user_id}` === key
+      const existingSession = activeSessionsByKey.get(key);
+      const sessionMatchesChannel = (
+        existingSession &&
+        existingSession.discord_channel_id === session.channel.channelId
       );
 
-      if (!exists) {
+      if (!sessionMatchesChannel) {
         await upsertUser(client, session.user);
         await upsertGuilds(client, [session.guild], { botPresent: true });
         await insertEvent(client, {
@@ -128,7 +153,7 @@ async function reconcileTrackedVoiceSessions(payload) {
           timestamp: payload.observedAt,
           metadata: {
             channelName: session.channel.name || null,
-            reason: "reconciled_present"
+            reason: existingSession ? "reconciled_switch" : "reconciled_present"
           }
         });
         await startVoiceSession(client, {
@@ -137,7 +162,15 @@ async function reconcileTrackedVoiceSessions(payload) {
           channelId: session.channel.channelId,
           startTime: payload.observedAt
         });
+        continue;
       }
+
+      await touchActiveVoiceSession(client, {
+        userId: session.user.userId,
+        guildId: session.guild.guildId,
+        channelId: session.channel.channelId,
+        observedAt: payload.observedAt
+      });
     }
 
     return {

@@ -84,6 +84,10 @@ async function startDiscordAuth(req, res) {
   res.redirect(getDiscordAuthorizationUrl());
 }
 
+async function startDiscordInstall(req, res) {
+  res.redirect(getDiscordBotInstallUrl());
+}
+
 async function handleDiscordCallback(req, res, next) {
   const { code, state } = req.query;
 
@@ -201,5 +205,6 @@ module.exports = {
   getCurrentUser,
   handleDiscordCallback,
   logout,
+  startDiscordInstall,
   startDiscordAuth
 };

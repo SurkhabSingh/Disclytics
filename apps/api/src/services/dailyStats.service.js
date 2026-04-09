@@ -1,4 +1,5 @@
 const { pool } = require("../db/pool");
+const { getEffectiveVoiceEndSql } = require("../lib/voiceSessionSql");
 
 async function refreshDailyStatsForDate(statDate) {
   const client = await pool.connect();
@@ -44,17 +45,17 @@ async function refreshDailyStatsForDate(statDate) {
             discord_user_id,
             discord_guild_id,
             COALESCE(SUM(
-              GREATEST(
-                0,
-                EXTRACT(EPOCH FROM (
-                  LEAST(COALESCE(end_time, day_window.day_end), day_window.day_end) -
+                GREATEST(
+                  0,
+                  EXTRACT(EPOCH FROM (
+                  LEAST(${getEffectiveVoiceEndSql("", "day_window.day_end")}, day_window.day_end) -
                   GREATEST(start_time, day_window.day_start)
                 ))
               )
             ), 0)::INTEGER AS total_voice_seconds
           FROM voice_sessions, day_window
           WHERE start_time < day_window.day_end
-            AND COALESCE(end_time, day_window.day_end) > day_window.day_start
+            AND LEAST(${getEffectiveVoiceEndSql("", "day_window.day_end")}, day_window.day_end) > day_window.day_start
           GROUP BY discord_user_id, discord_guild_id
         )
         INSERT INTO daily_stats (

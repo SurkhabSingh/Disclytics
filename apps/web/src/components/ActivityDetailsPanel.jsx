@@ -7,7 +7,7 @@ function formatTimestamp(value) {
 
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
-    timeStyle: "short"
+    timeStyle: "short",
   }).format(new Date(value));
 }
 
@@ -26,13 +26,24 @@ function formatDuration(seconds) {
 function MediaPreview({ item }) {
   if (item.kind === "video") {
     return (
-      <video className="message-media" controls preload="metadata" src={item.url}>
+      <video
+        className="message-media"
+        controls
+        preload="metadata"
+        src={item.url}
+      >
         Your browser does not support embedded video previews.
       </video>
     );
   }
 
-  return <img alt={item.label || "Shared media"} className="message-media" src={item.url} />;
+  return (
+    <img
+      alt={item.label || "Shared media"}
+      className="message-media"
+      src={item.url}
+    />
+  );
 }
 
 function MessageList({ items }) {
@@ -43,7 +54,10 @@ function MessageList({ items }) {
   return (
     <div className="activity-list">
       {items.map((item, index) => (
-        <article key={`${item.occurredAt}-${item.channelId}-${index}`} className="activity-row">
+        <article
+          key={`${item.occurredAt}-${item.channelId}-${index}`}
+          className="activity-row"
+        >
           <div className="activity-topline">
             <span className="pill">{item.channelName || item.channelId}</span>
             <time>{formatTimestamp(item.occurredAt)}</time>
@@ -80,7 +94,10 @@ function VoiceList({ items }) {
   return (
     <div className="activity-list">
       {items.map((item, index) => (
-        <article key={`${item.startTime}-${item.channelId}-${index}`} className="activity-row">
+        <article
+          key={`${item.startTime}-${item.channelId}-${index}`}
+          className="activity-row"
+        >
           <div className="activity-topline">
             <span className="pill">{item.channelName || item.channelId}</span>
             <span className="pill">{formatDuration(item.durationSeconds)}</span>
@@ -96,7 +113,10 @@ function VoiceList({ items }) {
   );
 }
 
-export const ActivityDetailsPanel = memo(function ActivityDetailsPanel({ recentMessages, recentVoiceSessions }) {
+export const ActivityDetailsPanel = memo(function ActivityDetailsPanel({
+  recentMessages,
+  recentVoiceSessions,
+}) {
   const [activeTab, setActiveTab] = useState("voice");
 
   return (
@@ -104,7 +124,6 @@ export const ActivityDetailsPanel = memo(function ActivityDetailsPanel({ recentM
       <div className="panel-header">
         <div>
           <p className="eyebrow">Activity log</p>
-          <p className="panel-title">See the actual sessions and messages behind the totals</p>
         </div>
       </div>
 

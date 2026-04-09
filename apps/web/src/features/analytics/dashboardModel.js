@@ -97,20 +97,6 @@ function normalizeHourlyPoint(row) {
   };
 }
 
-function normalizePeerPoint(row) {
-  return {
-    userId: asOptionalText(row?.userId),
-    displayName: asOptionalText(row?.displayName) || "Unknown user",
-    totalMessages: asNonNegativeNumber(row?.totalMessages),
-    totalVoiceSeconds: asNonNegativeNumber(row?.totalVoiceSeconds),
-    avgMessagesPerDay: asNonNegativeNumber(row?.avgMessagesPerDay),
-    avgVoiceSecondsPerDay: asNonNegativeNumber(row?.avgVoiceSecondsPerDay),
-    recentTotalMessages: asNonNegativeNumber(row?.recentTotalMessages),
-    recentTotalVoiceSeconds: asNonNegativeNumber(row?.recentTotalVoiceSeconds),
-    isCurrentUser: Boolean(row?.isCurrentUser)
-  };
-}
-
 function normalizeScope(scope, options = {}) {
   return {
     date: asOptionalText(scope?.date),
@@ -119,16 +105,6 @@ function normalizeScope(scope, options = {}) {
     hourlyBreakdown: options.includeHourly
       ? asArray(scope?.hourlyBreakdown).map(normalizeHourlyPoint)
       : [],
-    comparison: options.includeComparison
-      ? {
-        trackedDayCount: asNonNegativeNumber(scope?.comparison?.trackedDayCount),
-        recentWindowDays: asNonNegativeNumber(scope?.comparison?.recentWindowDays),
-        peers: {
-          lifetime: asArray(scope?.comparison?.peers?.lifetime).map(normalizePeerPoint),
-          daily: asArray(scope?.comparison?.peers?.daily).map(normalizePeerPoint)
-        }
-      }
-      : null,
     leaderboards: {
       chatChannels: asArray(scope?.leaderboards?.chatChannels).map((row) => normalizeLeaderboardItem(row, false)),
       voiceChannels: asArray(scope?.leaderboards?.voiceChannels).map((row) => normalizeLeaderboardItem(row, true))
@@ -146,10 +122,7 @@ export function normalizeDashboardPayload(payload) {
   };
   const today = normalizeScope(payload?.scopes?.today, { includeHourly: true });
   const history = normalizeScope(payload?.scopes?.history, { includeHourly: true });
-  const lifetime = normalizeScope(payload?.scopes?.lifetime, {
-    includeComparison: true,
-    includeTrend: true
-  });
+  const lifetime = normalizeScope(payload?.scopes?.lifetime, { includeTrend: true });
   const availableDates = asArray(payload?.availableDates).filter((value) => typeof value === "string");
   const selectedDate = asOptionalText(payload?.selectedDate) || availableDates[0] || trackedRange.lastActivityDate || todayDate;
 
@@ -179,91 +152,5 @@ export function normalizeDashboardPayload(payload) {
     selectedDate,
     todayDate,
     trackedRange
-  };
-}
-
-function applyScopeLiveVoice(scope, elapsedSeconds, options = {}) {
-  if (!scope || elapsedSeconds <= 0) {
-    return scope;
-  }
-
-  const activeSessions = asArray(scope.recentVoiceSessions).filter((session) => !session.endTime);
-
-  if (!activeSessions.length) {
-    return scope;
-  }
-
-  const liveExtraSeconds = activeSessions.length * elapsedSeconds;
-  const nextScope = {
-    ...scope,
-    summary: {
-      ...scope.summary,
-      totalVoiceSeconds: asNonNegativeNumber(scope.summary?.totalVoiceSeconds) + liveExtraSeconds
-    },
-    recentVoiceSessions: asArray(scope.recentVoiceSessions).map((session) => (
-      session.endTime
-        ? session
-        : {
-          ...session,
-          durationSeconds: asNonNegativeNumber(session.durationSeconds) + elapsedSeconds
-        }
-    ))
-  };
-
-  if (Array.isArray(scope.trend)) {
-    nextScope.trend = scope.trend.map((item, index, items) => (
-      index === items.length - 1
-        ? {
-          ...item,
-          totalVoiceSeconds: asNonNegativeNumber(item.totalVoiceSeconds) + liveExtraSeconds
-        }
-        : item
-    ));
-  }
-
-  if (Array.isArray(scope.hourlyBreakdown) && typeof options.currentHour === "number") {
-    nextScope.hourlyBreakdown = scope.hourlyBreakdown.map((item) => (
-      item.hourOfDay === options.currentHour
-        ? {
-          ...item,
-          totalVoiceSeconds: asNonNegativeNumber(item.totalVoiceSeconds) + liveExtraSeconds
-        }
-        : item
-    ));
-  }
-
-  return nextScope;
-}
-
-export function applyLiveVoiceProgress(dashboard, lastUpdatedAt, nowTimestamp) {
-  if (!dashboard || !lastUpdatedAt) {
-    return dashboard;
-  }
-
-  const elapsedSeconds = Math.max(
-    0,
-    Math.floor((nowTimestamp - new Date(lastUpdatedAt).getTime()) / 1000)
-  );
-
-  if (elapsedSeconds <= 0) {
-    return dashboard;
-  }
-
-  const currentUtcDate = new Date(nowTimestamp).toISOString().slice(0, 10);
-  const currentUtcHour = new Date(nowTimestamp).getUTCHours();
-
-  return {
-    ...dashboard,
-    scopes: {
-      today: applyScopeLiveVoice(dashboard.scopes?.today, elapsedSeconds, {
-        currentHour: currentUtcHour
-      }),
-      history: dashboard.selectedDate === currentUtcDate
-        ? applyScopeLiveVoice(dashboard.scopes?.history, elapsedSeconds, {
-          currentHour: currentUtcHour
-        })
-        : dashboard.scopes?.history,
-      lifetime: applyScopeLiveVoice(dashboard.scopes?.lifetime, elapsedSeconds)
-    }
   };
 }

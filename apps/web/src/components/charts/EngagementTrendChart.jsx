@@ -9,7 +9,7 @@ import {
   YAxis
 } from "recharts";
 
-import { formatVoiceDuration } from "../../utils/engagement";
+import { formatVoiceAxisDuration, formatVoiceDuration } from "../../utils/engagement";
 
 function formatDayLabel(value) {
   return new Intl.DateTimeFormat(undefined, {
@@ -87,7 +87,7 @@ export const EngagementTrendChart = memo(function EngagementTrendChart({ data, t
               allowDecimals={false}
               tickFormatter={(value) => (
                 metric === "voice"
-                  ? formatVoiceDuration(value)
+                  ? formatVoiceAxisDuration(value)
                   : value
               )}
             />

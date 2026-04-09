@@ -1,5 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
-import { FiLogIn, FiLogOut, FiMoon, FiPlus, FiSun } from "react-icons/fi";
+import { useEffect, useState } from "react";
+import {
+  FiArrowRight,
+  FiBell,
+  FiCalendar,
+  FiLogIn,
+  FiLogOut,
+  FiMessageSquare,
+  FiMic,
+  FiMoon,
+  FiPlus,
+  FiSun
+} from "react-icons/fi";
 
 import { analyticsApi, authApi, remindersApi } from "../api/client";
 import { ActivityDetailsPanel } from "../components/ActivityDetailsPanel";
@@ -9,20 +20,17 @@ import { LeaderboardPanel } from "../components/LeaderboardPanel";
 import { MetricCard } from "../components/MetricCard";
 import { ReminderPanel } from "../components/ReminderPanel";
 import { ActivityHeatmap } from "../components/charts/ActivityHeatmap";
-import { EngagementScatterChart } from "../components/charts/EngagementScatterChart";
 import { EngagementTrendChart } from "../components/charts/EngagementTrendChart";
 import { HourlyUsageChart } from "../components/charts/HourlyUsageChart";
-import { applyLiveVoiceProgress } from "../features/analytics/dashboardModel";
+import { normalizeDashboardPayload } from "../features/analytics/dashboardModel";
 
 const THEME_STORAGE_KEY = "disclytics-theme";
-const DASHBOARD_REFRESH_MS = 10000;
-const LIVE_VOICE_TICK_MS = 1000;
 
 const FEATURE_CHANNELS = [
   {
     id: "today",
     label: "today's activity",
-    description: "Live activity, channels you used today, and a simple hourly graph."
+    description: "Today's activity, channels you used today, and a simple hourly graph."
   },
   {
     id: "history",
@@ -41,6 +49,33 @@ const FEATURE_CHANNELS = [
   }
 ];
 
+const LANDING_FEATURES = [
+  {
+    id: "feature-today",
+    icon: FiMic,
+    title: "Track today's activity",
+    description: "See how much time you spent in voice, how many messages you sent, and which channels were active today."
+  },
+  {
+    id: "feature-history",
+    icon: FiCalendar,
+    title: "Browse historical days",
+    description: "Open any tracked date from the calendar and load the exact voice sessions, messages, and activity totals for that day."
+  },
+  {
+    id: "feature-lifetime",
+    icon: FiMessageSquare,
+    title: "Understand long-term patterns",
+    description: "Follow lifetime trends, channel leaderboards, and recurring habits across the servers where Disclytics is installed."
+  },
+  {
+    id: "feature-reminders",
+    icon: FiBell,
+    title: "Schedule reminder DMs",
+    description: "Create reminders from the dashboard or Discord and let Disclytics send them back to you when they are due."
+  }
+];
+
 function formatVoiceSeconds(seconds) {
   const totalMinutes = Math.max(0, Math.round((seconds || 0) / 60));
   const hours = Math.floor(totalMinutes / 60);
@@ -50,10 +85,10 @@ function formatVoiceSeconds(seconds) {
 
 function formatRefreshTime(value) {
   if (!value) {
-    return "Auto-refreshing every 10 seconds";
+    return "Refresh the page to load the latest analytics";
   }
 
-  return `Live refresh active. Last sync ${new Intl.DateTimeFormat(undefined, {
+  return `Snapshot from ${new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit"
@@ -121,6 +156,21 @@ function FeatureSidebar({ activeChannel, onSelectChannel }) {
   );
 }
 
+function LandingFeatureCard({ description, icon: Icon, title }) {
+  return (
+    <article className="panel landing-feature-card">
+      <div className="landing-feature-icon">
+        <Icon aria-hidden="true" />
+      </div>
+      <div>
+        <p className="eyebrow">Feature</p>
+        <p className="panel-title landing-feature-title">{title}</p>
+        <p className="chart-copy landing-feature-copy">{description}</p>
+      </div>
+    </article>
+  );
+}
+
 function ScopeMetrics({ scope, detail }) {
   return (
     <section className="metric-grid">
@@ -148,7 +198,6 @@ export function DashboardPage() {
   const [activeChannel, setActiveChannel] = useState("today");
   const [selectedDate, setSelectedDate] = useState(null);
   const [visibleMonth, setVisibleMonth] = useState(null);
-  const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
   const [creatingReminder, setCreatingReminder] = useState(false);
   const [state, setState] = useState({
     loading: true,
@@ -167,25 +216,23 @@ export function DashboardPage() {
   }, [theme]);
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      setNowTimestamp(Date.now());
-    }, LIVE_VOICE_TICK_MS);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  useEffect(() => {
     let active = true;
+    let dashboardAbortController = null;
 
     async function load() {
+      dashboardAbortController?.abort();
+      dashboardAbortController = new AbortController();
+
       try {
-        const [{ user, botInstallUrl }, dashboard, remindersResponse] = await Promise.all([
-          authApi.getCurrentUser(),
-          analyticsApi.getDashboard(selectedDate),
-          remindersApi.list().catch(() => ({ reminders: [] }))
+        const [{ user, botInstallUrl }, dashboardPayload] = await Promise.all([
+          authApi.getCurrentUser({
+            signal: dashboardAbortController.signal
+          }),
+          analyticsApi.getDashboard(selectedDate, {
+            signal: dashboardAbortController.signal
+          })
         ]);
+        const dashboard = normalizeDashboardPayload(dashboardPayload);
 
         if (!active) {
           return;
@@ -195,22 +242,28 @@ export function DashboardPage() {
           setSelectedDate(dashboard.selectedDate);
         }
 
-        if (!visibleMonth && dashboard?.selectedDate) {
-          setVisibleMonth(getMonthToken(dashboard.selectedDate));
+        if (dashboard?.selectedDate) {
+          setVisibleMonth((currentVisibleMonth) => (
+            currentVisibleMonth || getMonthToken(dashboard.selectedDate)
+          ));
         }
 
-        setState({
+        setState((previous) => ({
+          ...previous,
           loading: false,
           authenticated: true,
           user,
           botInstallUrl: botInstallUrl || null,
           dashboard,
-          reminders: Array.isArray(remindersResponse?.reminders) ? remindersResponse.reminders : [],
           error: null,
           lastUpdatedAt: new Date().toISOString()
-        });
+        }));
       } catch (error) {
         if (!active) {
+          return;
+        }
+
+        if (error?.name === "AbortError") {
           return;
         }
 
@@ -236,29 +289,52 @@ export function DashboardPage() {
       }
     }
 
-    function handleVisibilityChange() {
-      if (document.visibilityState === "visible") {
-        load();
-      }
-    }
-
-    load();
-    const intervalId = window.setInterval(load, DASHBOARD_REFRESH_MS);
-    window.addEventListener("focus", load);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    void load();
 
     return () => {
       active = false;
-      window.clearInterval(intervalId);
-      window.removeEventListener("focus", load);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      dashboardAbortController?.abort();
     };
-  }, [selectedDate, visibleMonth]);
+  }, [selectedDate]);
 
-  const dashboard = useMemo(
-    () => applyLiveVoiceProgress(state.dashboard, state.lastUpdatedAt, nowTimestamp),
-    [state.dashboard, state.lastUpdatedAt, nowTimestamp]
-  );
+  useEffect(() => {
+    if (state.loading || !state.authenticated) {
+      return undefined;
+    }
+
+    let active = true;
+    const remindersAbortController = new AbortController();
+
+    async function loadReminders() {
+      try {
+        const remindersResponse = await remindersApi.list({
+          signal: remindersAbortController.signal
+        });
+
+        if (!active) {
+          return;
+        }
+
+        setState((previous) => ({
+          ...previous,
+          reminders: Array.isArray(remindersResponse?.reminders) ? remindersResponse.reminders : []
+        }));
+      } catch (error) {
+        if (!active || error?.name === "AbortError") {
+          return;
+        }
+      }
+    }
+
+    void loadReminders();
+
+    return () => {
+      active = false;
+      remindersAbortController.abort();
+    };
+  }, [state.loading, state.authenticated]);
+
+  const dashboard = state.dashboard;
 
   async function handleCreateReminder(payload) {
     setCreatingReminder(true);
@@ -303,14 +379,50 @@ export function DashboardPage() {
             </a>
           </div>
         </nav>
-        <section className="hero-card landing-card">
+        <section className="hero-card landing-card landing-hero-card">
           <div className="hero-copy">
             <p className="eyebrow">Disclytics</p>
-            <h1>Server-scoped Discord analytics that stay inside platform rules</h1>
+            <h1>Know who is active in your Discord without breaking trust.</h1>
             <p>
-              Disclytics tracks messages and voice activity only in servers where your bot is present.
-              Nothing global, nothing hidden, and nothing outside the communities that explicitly install it.
+              Disclytics gives server-scoped analytics for messages, voice sessions, reminders, and channel activity.
+              It only tracks what happens inside servers where the bot is actually installed.
             </p>
+            <div className="landing-cta-row">
+              <a className="primary-button" href={authApi.getInstallUrl()} rel="noreferrer" target="_blank">
+                Add to Discord
+              </a>
+              <a className="secondary-button" href="#features">
+                See features
+              </a>
+            </div>
+          </div>
+          <div className="action-panel landing-side-note">
+            <p className="eyebrow">Built for clarity</p>
+            <p className="panel-title">No global tracking. No self-bots. No user tokens.</p>
+            <p className="chart-copy">
+              Disclytics stays inside Discord’s rules and focuses on the servers that intentionally install the bot.
+            </p>
+            <a className="secondary-button landing-login-link" href={authApi.getLoginUrl()}>
+              Sign in to your dashboard
+              <FiArrowRight aria-hidden="true" />
+            </a>
+          </div>
+        </section>
+
+        <section className="landing-features" id="features">
+          <div className="landing-section-heading">
+            <p className="eyebrow">Features</p>
+            <p className="panel-title landing-section-title">Everything Disclytics gives your server in one simple flow</p>
+          </div>
+          <div className="landing-feature-grid">
+            {LANDING_FEATURES.map((feature) => (
+              <LandingFeatureCard
+                key={feature.id}
+                description={feature.description}
+                icon={feature.icon}
+                title={feature.title}
+              />
+            ))}
           </div>
         </section>
       </div>
@@ -331,7 +443,7 @@ export function DashboardPage() {
       <>
         <ChannelIntro
           channelName={activeChannelMeta.label}
-          description="Here is everything Disclytics has tracked for you today so far, including your current live voice time."
+          description="Here is everything Disclytics has tracked for you today so far, including your voice time so far."
         />
         <ScopeMetrics detail={`Today | ${dashboard.todayDate}`} scope={todayScope} />
         <section className="dashboard-grid analytics-primary-grid">
@@ -408,34 +520,13 @@ export function DashboardPage() {
       <>
         <ChannelIntro
           channelName={activeChannelMeta.label}
-          description="This combines all tracked Disclytics history, including today, so you can compare your engagement against other tracked users in your shared servers."
+          description="This combines all tracked Disclytics history, including today, so you can follow your long-term voice, messaging, and channel activity trends."
         />
         <EngagementKpiGrid
           summary={lifetimeScope.summary}
-          trackedDayCount={lifetimeScope.comparison?.trackedDayCount}
+          trackedDayCount={lifetimeScope.trend?.length || 0}
           trackedStartDate={dashboard.trackedRange.firstActivityDate}
         />
-        <section className="dashboard-grid engagement-scatter-grid">
-          <EngagementScatterChart
-            description="Each bubble is a tracked user from the servers you share with the bot. Bubble size reflects overall engagement, and the quadrant lines split the crowd into behavior groups."
-            points={lifetimeScope.comparison?.peers?.lifetime || []}
-            title="Lifetime engagement map"
-            xKey="totalVoiceSeconds"
-            xLabel="Total voice time"
-            yKey="totalMessages"
-            yLabel="Total messages"
-          />
-          <EngagementScatterChart
-            averageMode
-            description={`This view averages the last ${lifetimeScope.comparison?.recentWindowDays || 7} days so you can spot current engagement habits, not just all-time volume.`}
-            points={lifetimeScope.comparison?.peers?.daily || []}
-            title="Recent daily engagement map"
-            xKey="avgVoiceSecondsPerDay"
-            xLabel="Avg voice time per day"
-            yKey="avgMessagesPerDay"
-            yLabel="Avg messages per day"
-          />
-        </section>
         <EngagementTrendChart
           data={lifetimeScope.trend}
           trackedStartDate={dashboard.trackedRange.firstActivityDate}

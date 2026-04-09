@@ -1,3 +1,8 @@
+const { getEffectiveVoiceEndSql } = require("../lib/voiceSessionSql");
+
+const EFFECTIVE_VOICE_END = getEffectiveVoiceEndSql();
+const EFFECTIVE_VOICE_END_VS = getEffectiveVoiceEndSql("vs");
+
 async function getCoverage(client, userId) {
   const { rows } = await client.query(
     `
@@ -37,7 +42,7 @@ async function getTrackedDateBounds(client, userId) {
       voice_bounds AS (
         SELECT
           MIN(DATE(start_time)) AS first_date,
-          MAX(DATE(COALESCE(end_time, start_time))) AS last_date
+          MAX(DATE(${EFFECTIVE_VOICE_END})) AS last_date
         FROM voice_sessions
         WHERE discord_user_id = $1
       )
@@ -95,7 +100,7 @@ async function getLifetimeTrend(client, userId, startDate) {
               0,
               EXTRACT(EPOCH FROM (
                 LEAST(
-                  COALESCE(vs.end_time, ds.stat_date + INTERVAL '1 day'),
+                  LEAST(${EFFECTIVE_VOICE_END_VS}, ds.stat_date + INTERVAL '1 day'),
                   ds.stat_date + INTERVAL '1 day'
                 ) -
                 GREATEST(vs.start_time, ds.stat_date)
@@ -106,7 +111,7 @@ async function getLifetimeTrend(client, userId, startDate) {
         LEFT JOIN voice_sessions vs
           ON vs.discord_user_id = $1
           AND vs.start_time < ds.stat_date + INTERVAL '1 day'
-          AND COALESCE(vs.end_time, ds.stat_date + INTERVAL '1 day') > ds.stat_date
+          AND LEAST(${EFFECTIVE_VOICE_END_VS}, ds.stat_date + INTERVAL '1 day') > ds.stat_date
         GROUP BY ds.stat_date
       )
       SELECT
@@ -141,7 +146,7 @@ async function getScopedSummary(client, userId, startAt, endAt) {
             GREATEST(
               0,
               EXTRACT(EPOCH FROM (
-                LEAST(COALESCE(end_time, $3::TIMESTAMPTZ), $3::TIMESTAMPTZ) -
+                LEAST(${EFFECTIVE_VOICE_END}, $3::TIMESTAMPTZ) -
                 GREATEST(start_time, $2::TIMESTAMPTZ)
               ))
             )
@@ -149,7 +154,7 @@ async function getScopedSummary(client, userId, startAt, endAt) {
         FROM voice_sessions
         WHERE discord_user_id = $1
           AND start_time < $3::TIMESTAMPTZ
-          AND COALESCE(end_time, $3::TIMESTAMPTZ) > $2::TIMESTAMPTZ
+          AND LEAST(${EFFECTIVE_VOICE_END}, $3::TIMESTAMPTZ) > $2::TIMESTAMPTZ
       ),
       top_channel AS (
         SELECT
@@ -221,7 +226,7 @@ async function getTopVoiceChannels(client, userId, startAt, endAt, limit = 8) {
           GREATEST(
             0,
             EXTRACT(EPOCH FROM (
-              LEAST(COALESCE(vs.end_time, $3::TIMESTAMPTZ), $3::TIMESTAMPTZ) -
+              LEAST(${EFFECTIVE_VOICE_END_VS}, $3::TIMESTAMPTZ) -
               GREATEST(vs.start_time, $2::TIMESTAMPTZ)
             ))
           )
@@ -231,7 +236,7 @@ async function getTopVoiceChannels(client, userId, startAt, endAt, limit = 8) {
         ON channel_names.discord_channel_id = vs.discord_channel_id
       WHERE vs.discord_user_id = $1
         AND vs.start_time < $3::TIMESTAMPTZ
-        AND COALESCE(vs.end_time, $3::TIMESTAMPTZ) > $2::TIMESTAMPTZ
+        AND LEAST(${EFFECTIVE_VOICE_END_VS}, $3::TIMESTAMPTZ) > $2::TIMESTAMPTZ
       GROUP BY vs.discord_channel_id, channel_names.channel_name
       ORDER BY total_voice_seconds DESC, channel_name ASC
       LIMIT $4
@@ -294,7 +299,7 @@ async function getHourlyBreakdown(client, userId, selectedDate) {
             GREATEST(
               0,
               EXTRACT(EPOCH FROM (
-                LEAST(COALESCE(vs.end_time, hw.hour_end), hw.hour_end) -
+                LEAST(${EFFECTIVE_VOICE_END_VS}, hw.hour_end) -
                 GREATEST(vs.start_time, hw.hour_start)
               ))
             )
@@ -303,7 +308,7 @@ async function getHourlyBreakdown(client, userId, selectedDate) {
         LEFT JOIN voice_sessions vs
           ON vs.discord_user_id = $1
           AND vs.start_time < hw.hour_end
-          AND COALESCE(vs.end_time, hw.hour_end) > hw.hour_start
+          AND LEAST(${EFFECTIVE_VOICE_END_VS}, hw.hour_end) > hw.hour_start
         GROUP BY hw.hour_of_day
       )
       SELECT
@@ -372,7 +377,7 @@ async function getRecentVoiceSessions(client, userId, options = {}) {
   if (startAt && endAt) {
     params.push(startAt, endAt);
     filters.push(`vs.start_time < $${params.length}::TIMESTAMPTZ`);
-    filters.push(`COALESCE(vs.end_time, $${params.length}::TIMESTAMPTZ) > $${params.length - 1}::TIMESTAMPTZ`);
+    filters.push(`LEAST(${EFFECTIVE_VOICE_END_VS}, $${params.length}::TIMESTAMPTZ) > $${params.length - 1}::TIMESTAMPTZ`);
   }
 
   params.push(limit);
@@ -383,7 +388,7 @@ async function getRecentVoiceSessions(client, userId, options = {}) {
         vs.start_time,
         vs.end_time,
         CASE
-          WHEN vs.end_time IS NULL THEN GREATEST(0, EXTRACT(EPOCH FROM (NOW() - vs.start_time)))::INTEGER
+          WHEN vs.end_time IS NULL THEN GREATEST(0, EXTRACT(EPOCH FROM (${EFFECTIVE_VOICE_END_VS} - vs.start_time)))::INTEGER
           ELSE COALESCE(vs.duration_seconds, 0)::INTEGER
         END AS duration_seconds,
         vs.closed_reason,
@@ -405,167 +410,6 @@ async function getRecentVoiceSessions(client, userId, options = {}) {
       LIMIT $${params.length}
     `,
     params
-  );
-
-  return rows;
-}
-
-async function getPeerLifetimeEngagement(client, viewerUserId) {
-  const { rows } = await client.query(
-    `
-      WITH tracked_guilds AS (
-        SELECT ug.discord_guild_id
-        FROM user_guilds ug
-        JOIN guilds g
-          ON g.discord_guild_id = ug.discord_guild_id
-        WHERE ug.discord_user_id = $1
-          AND g.bot_present = TRUE
-      ),
-      message_totals AS (
-        SELECT
-          e.discord_user_id,
-          COUNT(*)::INTEGER AS total_messages
-        FROM events e
-        JOIN tracked_guilds tg
-          ON tg.discord_guild_id = e.discord_guild_id
-        WHERE e.type = 'message'
-        GROUP BY e.discord_user_id
-      ),
-      voice_totals AS (
-        SELECT
-          vs.discord_user_id,
-          COALESCE(SUM(
-            GREATEST(
-              0,
-              EXTRACT(EPOCH FROM (COALESCE(vs.end_time, NOW()) - vs.start_time))
-            )
-          ), 0)::INTEGER AS total_voice_seconds
-        FROM voice_sessions vs
-        JOIN tracked_guilds tg
-          ON tg.discord_guild_id = vs.discord_guild_id
-        GROUP BY vs.discord_user_id
-      ),
-      peer_users AS (
-        SELECT discord_user_id FROM message_totals
-        UNION
-        SELECT discord_user_id FROM voice_totals
-      )
-      SELECT
-        pu.discord_user_id AS user_id,
-        COALESCE(NULLIF(u.global_name, ''), NULLIF(u.username, ''), pu.discord_user_id) AS display_name,
-        COALESCE(mt.total_messages, 0)::INTEGER AS total_messages,
-        COALESCE(vt.total_voice_seconds, 0)::INTEGER AS total_voice_seconds
-      FROM peer_users pu
-      LEFT JOIN users u
-        ON u.discord_user_id = pu.discord_user_id
-      LEFT JOIN message_totals mt
-        ON mt.discord_user_id = pu.discord_user_id
-      LEFT JOIN voice_totals vt
-        ON vt.discord_user_id = pu.discord_user_id
-      ORDER BY
-        (COALESCE(mt.total_messages, 0) + (COALESCE(vt.total_voice_seconds, 0) / 600.0)) DESC,
-        display_name ASC
-    `,
-    [viewerUserId]
-  );
-
-  return rows;
-}
-
-async function getPeerRecentDailyEngagement(client, viewerUserId, windowDays = 7) {
-  const safeWindowDays = Math.max(1, Number(windowDays || 7));
-  const { rows } = await client.query(
-    `
-      WITH tracked_guilds AS (
-        SELECT ug.discord_guild_id
-        FROM user_guilds ug
-        JOIN guilds g
-          ON g.discord_guild_id = ug.discord_guild_id
-        WHERE ug.discord_user_id = $1
-          AND g.bot_present = TRUE
-      ),
-      peer_users AS (
-        SELECT DISTINCT e.discord_user_id
-        FROM events e
-        JOIN tracked_guilds tg
-          ON tg.discord_guild_id = e.discord_guild_id
-        UNION
-        SELECT DISTINCT vs.discord_user_id
-        FROM voice_sessions vs
-        JOIN tracked_guilds tg
-          ON tg.discord_guild_id = vs.discord_guild_id
-      ),
-      day_series AS (
-        SELECT generate_series(
-          CURRENT_DATE - (($2::INTEGER - 1) * INTERVAL '1 day'),
-          CURRENT_DATE,
-          INTERVAL '1 day'
-        )::DATE AS stat_date
-      ),
-      user_days AS (
-        SELECT
-          pu.discord_user_id,
-          ds.stat_date,
-          ds.stat_date::TIMESTAMPTZ AS day_start,
-          (ds.stat_date + INTERVAL '1 day')::TIMESTAMPTZ AS day_end
-        FROM peer_users pu
-        CROSS JOIN day_series ds
-      ),
-      message_daily AS (
-        SELECT
-          e.discord_user_id,
-          DATE(e.occurred_at) AS stat_date,
-          COUNT(*)::INTEGER AS total_messages
-        FROM events e
-        JOIN tracked_guilds tg
-          ON tg.discord_guild_id = e.discord_guild_id
-        WHERE e.type = 'message'
-          AND e.occurred_at >= CURRENT_DATE - (($2::INTEGER - 1) * INTERVAL '1 day')
-        GROUP BY e.discord_user_id, DATE(e.occurred_at)
-      ),
-      voice_daily AS (
-        SELECT
-          ud.discord_user_id,
-          ud.stat_date,
-          COALESCE(SUM(
-            GREATEST(
-              0,
-              EXTRACT(EPOCH FROM (
-                LEAST(COALESCE(vs.end_time, ud.day_end), ud.day_end) -
-                GREATEST(vs.start_time, ud.day_start)
-              ))
-            )
-          ), 0)::INTEGER AS total_voice_seconds
-        FROM user_days ud
-        LEFT JOIN voice_sessions vs
-          ON vs.discord_user_id = ud.discord_user_id
-          AND vs.discord_guild_id IN (SELECT discord_guild_id FROM tracked_guilds)
-          AND vs.start_time < ud.day_end
-          AND COALESCE(vs.end_time, ud.day_end) > ud.day_start
-        GROUP BY ud.discord_user_id, ud.stat_date
-      )
-      SELECT
-        ud.discord_user_id AS user_id,
-        COALESCE(NULLIF(u.global_name, ''), NULLIF(u.username, ''), ud.discord_user_id) AS display_name,
-        ROUND(AVG(COALESCE(md.total_messages, 0))::NUMERIC, 2) AS avg_messages_per_day,
-        ROUND(AVG(COALESCE(vd.total_voice_seconds, 0))::NUMERIC, 2) AS avg_voice_seconds_per_day,
-        COALESCE(SUM(COALESCE(md.total_messages, 0)), 0)::INTEGER AS recent_total_messages,
-        COALESCE(SUM(COALESCE(vd.total_voice_seconds, 0)), 0)::INTEGER AS recent_total_voice_seconds
-      FROM user_days ud
-      LEFT JOIN users u
-        ON u.discord_user_id = ud.discord_user_id
-      LEFT JOIN message_daily md
-        ON md.discord_user_id = ud.discord_user_id
-        AND md.stat_date = ud.stat_date
-      LEFT JOIN voice_daily vd
-        ON vd.discord_user_id = ud.discord_user_id
-        AND vd.stat_date = ud.stat_date
-      GROUP BY ud.discord_user_id, u.global_name, u.username
-      ORDER BY
-        (COALESCE(SUM(COALESCE(md.total_messages, 0)), 0) + (COALESCE(SUM(COALESCE(vd.total_voice_seconds, 0)), 0) / 600.0)) DESC,
-        display_name ASC
-    `,
-    [viewerUserId, safeWindowDays]
   );
 
   return rows;
@@ -593,7 +437,7 @@ async function getGuildScopedSummary(client, userId, guildId, period) {
     : `AND occurred_at >= NOW() - ($3 || ' days')::INTERVAL`;
   const voiceWindowClause = dayWindow === null
     ? ""
-    : `AND COALESCE(end_time, NOW()) > NOW() - ($3 || ' days')::INTERVAL`;
+    : `AND ${getEffectiveVoiceEndSql("", "NOW()")} > NOW() - ($3 || ' days')::INTERVAL`;
 
   if (dayWindow !== null) {
     params.push(String(dayWindow));
@@ -615,7 +459,7 @@ async function getGuildScopedSummary(client, userId, guildId, period) {
             GREATEST(
               0,
               EXTRACT(EPOCH FROM (
-                LEAST(COALESCE(end_time, NOW()), NOW()) -
+                LEAST(${getEffectiveVoiceEndSql("", "NOW()")}, NOW()) -
                 GREATEST(
                   start_time,
                   ${dayWindow === null ? "start_time" : "NOW() - ($3 || ' days')::INTERVAL"}
@@ -664,7 +508,7 @@ async function getGuildScopedSummary(client, userId, guildId, period) {
           ${voiceWindowClause}
       ),
       last_voice AS (
-        SELECT MAX(COALESCE(end_time, start_time)) AS last_voice_at
+        SELECT MAX(${getEffectiveVoiceEndSql("", "NOW()")}) AS last_voice_at
         FROM voice_sessions
         WHERE discord_user_id = $1
           AND discord_guild_id = $2
@@ -696,8 +540,6 @@ module.exports = {
   getHourlyBreakdown,
   getLifetimeTrend,
   getRecentMessages,
-  getPeerLifetimeEngagement,
-  getPeerRecentDailyEngagement,
   getRecentVoiceSessions,
   getScopedSummary,
   getTopChatChannels,

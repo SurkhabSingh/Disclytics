@@ -20,6 +20,26 @@ const {
   getNextReminderState
 } = require("./reminderSchedule.service");
 
+const REMINDER_DELIVERY_CONCURRENCY = 5;
+
+async function dispatchReminder(reminder) {
+  logger.info("Dispatching reminder", {
+    reminderId: reminder.id,
+    userId: reminder.discord_user_id
+  });
+  await sendReminderCommand({
+    reminderId: reminder.id,
+    userId: reminder.discord_user_id,
+    guildId: reminder.discord_guild_id,
+    targetChannelId: reminder.target_channel_id,
+    title: reminder.title,
+    message: reminder.message,
+    deliveryModes: reminder.delivery_modes
+  });
+
+  return getNextReminderState(reminder);
+}
+
 async function createUserReminder(userId, payload) {
   const client = await pool.connect();
 
@@ -132,30 +152,35 @@ async function dispatchDueReminders() {
   try {
     const reminders = await findDueReminders(client, 100);
 
-    for (const reminder of reminders) {
-      try {
-        logger.info("Dispatching reminder", {
-          reminderId: reminder.id,
-          userId: reminder.discord_user_id
-        });
-        await sendReminderCommand({
-          reminderId: reminder.id,
-          userId: reminder.discord_user_id,
-          guildId: reminder.discord_guild_id,
-          targetChannelId: reminder.target_channel_id,
-          title: reminder.title,
-          message: reminder.message,
-          deliveryModes: reminder.delivery_modes
-        });
+    for (let index = 0; index < reminders.length; index += REMINDER_DELIVERY_CONCURRENCY) {
+      const reminderBatch = reminders.slice(index, index + REMINDER_DELIVERY_CONCURRENCY);
+      const batchResults = await Promise.all(reminderBatch.map(async (reminder) => {
+        try {
+          const nextState = await dispatchReminder(reminder);
+          return {
+            nextState,
+            reminder
+          };
+        } catch (error) {
+          return {
+            error,
+            reminder
+          };
+        }
+      }));
 
-        await updateReminderStatus(client, reminder.id, getNextReminderState(reminder));
+      for (const result of batchResults) {
+        if (result.error) {
+          logger.error("Failed to dispatch reminder", {
+            error: result.error,
+            reminderId: result.reminder.id
+          });
+          continue;
+        }
+
+        await updateReminderStatus(client, result.reminder.id, result.nextState);
         logger.info("Reminder dispatched successfully", {
-          reminderId: reminder.id
-        });
-      } catch (error) {
-        logger.error("Failed to dispatch reminder", {
-          error,
-          reminderId: reminder.id
+          reminderId: result.reminder.id
         });
       }
     }

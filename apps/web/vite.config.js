@@ -5,7 +5,12 @@ const reactPlugin = react.default || react;
 module.exports = defineConfig({
   plugins: [reactPlugin()],
   server: {
-    port: 5173
+    port: 4173,
+    strictPort: true
+  },
+  preview: {
+    port: 4174,
+    strictPort: true
   },
   test: {
     environment: "jsdom",

@@ -45,6 +45,36 @@ function createChannel(id, name, guild) {
   return channel;
 }
 
+function createClientWithVoiceState(member, channel) {
+  return {
+    guilds: {
+      cache: new Map([
+        [
+          member.guild.id,
+          {
+            ...member.guild,
+            voiceStates: {
+              cache: new Map([
+                [
+                  member.id,
+                  {
+                    channel,
+                    channelId: channel.id,
+                    member
+                  }
+                ]
+              ])
+            }
+          }
+        ]
+      ])
+    },
+    isReady() {
+      return true;
+    }
+  };
+}
+
 test("voice tracking starts a session when a user joins voice", async () => {
   const calls = [];
   const voiceSessionStore = createVoiceSessionStore();
@@ -106,4 +136,60 @@ test("voice tracking stops the old session and starts a new one on channel switc
   assert.equal(calls[1].payload.sessionStartTime, firstSession.startTime);
   assert.equal(calls[2].path, "/api/internal/voice-sessions/start");
   assert.equal(activeSession.channelId, "voice-2");
+});
+
+test("voice tracking reconciles users already in voice when the bot becomes ready", async () => {
+  const calls = [];
+  const voiceSessionStore = createVoiceSessionStore();
+  const member = createMember();
+  const general = createChannel("voice-1", "General", member.guild);
+  const client = createClientWithVoiceState(member, general);
+  const service = createVoiceTrackingService({
+    backendClient: {
+      post: async (path, payload) => {
+        calls.push({ path, payload });
+      }
+    },
+    logger: createLoggerStub(),
+    voiceSessionStore
+  });
+
+  await service.reconcileFromGateway(client, "ready");
+
+  const session = voiceSessionStore.get(member.guild.id, member.id);
+
+  assert.equal(calls[0].path, "/api/internal/voice-sessions/reconcile");
+  assert.equal(calls[0].payload.sessions.length, 1);
+  assert.equal(calls[0].payload.sessions[0].channel.channelId, "voice-1");
+  assert.equal(session.channelId, "voice-1");
+});
+
+test("voice tracking keeps the original store start time during repeated reconciliation", async () => {
+  const calls = [];
+  const voiceSessionStore = createVoiceSessionStore();
+  const member = createMember();
+  const general = createChannel("voice-1", "General", member.guild);
+  const client = createClientWithVoiceState(member, general);
+  const service = createVoiceTrackingService({
+    backendClient: {
+      post: async (path, payload) => {
+        calls.push({ path, payload });
+      }
+    },
+    logger: createLoggerStub(),
+    voiceSessionStore
+  });
+
+  await service.handleVoiceStateUpdate(
+    { channel: null, member },
+    { channel: general, member }
+  );
+  const firstSession = voiceSessionStore.get(member.guild.id, member.id);
+
+  await service.reconcileFromGateway(client, "interval");
+
+  const reconciledSession = voiceSessionStore.get(member.guild.id, member.id);
+
+  assert.equal(reconciledSession.startTime, firstSession.startTime);
+  assert.equal(calls[calls.length - 1].path, "/api/internal/voice-sessions/reconcile");
 });

@@ -143,7 +143,7 @@ npm run dev:web
 6. Open the dashboard:
 
 ```text
-http://localhost:5173
+http://localhost:4173
 ```
 
 ## Optional Local Container Setup

@@ -8,12 +8,13 @@ function formatAverageMessages(value) {
 }
 
 export const EngagementKpiGrid = memo(function EngagementKpiGrid({ summary, trackedDayCount, trackedStartDate }) {
-  const averages = calculateDailyAverages(summary, trackedDayCount);
+  const safeTrackedDayCount = Number(trackedDayCount || 0);
+  const averages = calculateDailyAverages(summary, safeTrackedDayCount);
   const dateDetail = trackedStartDate
     ? `Tracked since ${trackedStartDate}`
     : "Waiting for tracked activity";
-  const dayDetail = trackedDayCount
-    ? `Average across ${trackedDayCount} tracked day${trackedDayCount === 1 ? "" : "s"}`
+  const dayDetail = safeTrackedDayCount
+    ? `Average across ${safeTrackedDayCount} tracked day${safeTrackedDayCount === 1 ? "" : "s"}`
     : "Average will appear after activity is tracked";
 
   return (

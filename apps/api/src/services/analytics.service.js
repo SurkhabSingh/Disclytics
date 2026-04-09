@@ -5,8 +5,6 @@ const {
   getHeatmap,
   getHourlyBreakdown,
   getLifetimeTrend,
-  getPeerLifetimeEngagement,
-  getPeerRecentDailyEngagement,
   getRecentMessages,
   getRecentVoiceSessions,
   getScopedSummary,
@@ -14,7 +12,6 @@ const {
   getTopVoiceChannels,
   getTrackedDateBounds
 } = require("../repositories/analytics.repository");
-const { getUserById } = require("../repositories/user.repository");
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -141,33 +138,10 @@ function mapTrendRows(rows) {
   }));
 }
 
-function mapLifetimePeerRows(rows, currentUserId) {
-  return rows.map((row) => ({
-    userId: row.user_id,
-    displayName: row.display_name || row.user_id,
-    totalMessages: Number(row.total_messages || 0),
-    totalVoiceSeconds: Number(row.total_voice_seconds || 0),
-    isCurrentUser: row.user_id === currentUserId
-  }));
-}
-
-function mapDailyPeerRows(rows, currentUserId) {
-  return rows.map((row) => ({
-    userId: row.user_id,
-    displayName: row.display_name || row.user_id,
-    avgMessagesPerDay: Number(row.avg_messages_per_day || 0),
-    avgVoiceSecondsPerDay: Number(row.avg_voice_seconds_per_day || 0),
-    recentTotalMessages: Number(row.recent_total_messages || 0),
-    recentTotalVoiceSeconds: Number(row.recent_total_voice_seconds || 0),
-    isCurrentUser: row.user_id === currentUserId
-  }));
-}
-
 async function getDashboardAnalytics(userId, requestedDate) {
   const client = await pool.connect();
 
   try {
-    const user = await getUserById(client, userId);
     const coverage = await getCoverage(client, userId);
     const trackedBounds = await getTrackedDateBounds(client, userId);
 
@@ -187,29 +161,21 @@ async function getDashboardAnalytics(userId, requestedDate) {
     const todayEndAt = new Date().toISOString();
     const selectedDayStartAt = startOfDayUtc(selectedDate);
     const selectedDayEndAt = nextDayUtc(selectedDate);
+    const selectedDateIsToday = selectedDate === today;
 
     const lifetimeSummary = await getScopedSummary(client, userId, lifetimeStartAt, lifetimeEndAt);
     const todaySummary = await getScopedSummary(client, userId, todayStartAt, todayEndAt);
-    const historySummary = await getScopedSummary(client, userId, selectedDayStartAt, selectedDayEndAt);
     const lifetimeChatChannels = await getTopChatChannels(client, userId, lifetimeStartAt, lifetimeEndAt, 8);
     const todayChatChannels = await getTopChatChannels(client, userId, todayStartAt, todayEndAt, 8);
-    const historyChatChannels = await getTopChatChannels(client, userId, selectedDayStartAt, selectedDayEndAt, 8);
     const lifetimeVoiceChannels = await getTopVoiceChannels(client, userId, lifetimeStartAt, lifetimeEndAt, 8);
     const todayVoiceChannels = await getTopVoiceChannels(client, userId, todayStartAt, todayEndAt, 8);
-    const historyVoiceChannels = await getTopVoiceChannels(client, userId, selectedDayStartAt, selectedDayEndAt, 8);
     const heatmapRows = await getHeatmap(client, userId, lifetimeStartAt, lifetimeEndAt);
     const todayHourlyBreakdownRows = await getHourlyBreakdown(client, userId, today);
-    const historyHourlyBreakdownRows = await getHourlyBreakdown(client, userId, selectedDate);
     const lifetimeRecentMessages = await getRecentMessages(client, userId, { limit: 20 });
     const todayRecentMessages = await getRecentMessages(client, userId, {
       endAt: todayEndAt,
       limit: 20,
       startAt: todayStartAt
-    });
-    const selectedDayRecentMessages = await getRecentMessages(client, userId, {
-      endAt: selectedDayEndAt,
-      limit: 20,
-      startAt: selectedDayStartAt
     });
     const lifetimeRecentVoiceSessions = await getRecentVoiceSessions(client, userId, { limit: 20 });
     const todayRecentVoiceSessions = await getRecentVoiceSessions(client, userId, {
@@ -217,17 +183,34 @@ async function getDashboardAnalytics(userId, requestedDate) {
       limit: 20,
       startAt: todayStartAt
     });
-    const selectedDayRecentVoiceSessions = await getRecentVoiceSessions(client, userId, {
-      endAt: selectedDayEndAt,
-      limit: 20,
-      startAt: selectedDayStartAt
-    });
-    const peerLifetimeEngagement = await getPeerLifetimeEngagement(client, userId);
-    const peerRecentDailyEngagement = await getPeerRecentDailyEngagement(client, userId, 7);
-    const trackedDayCount = lifetimeTrend.length;
+    const historySummary = selectedDateIsToday
+      ? todaySummary
+      : await getScopedSummary(client, userId, selectedDayStartAt, selectedDayEndAt);
+    const historyChatChannels = selectedDateIsToday
+      ? todayChatChannels
+      : await getTopChatChannels(client, userId, selectedDayStartAt, selectedDayEndAt, 8);
+    const historyVoiceChannels = selectedDateIsToday
+      ? todayVoiceChannels
+      : await getTopVoiceChannels(client, userId, selectedDayStartAt, selectedDayEndAt, 8);
+    const historyHourlyBreakdownRows = selectedDateIsToday
+      ? todayHourlyBreakdownRows
+      : await getHourlyBreakdown(client, userId, selectedDate);
+    const selectedDayRecentMessages = selectedDateIsToday
+      ? todayRecentMessages
+      : await getRecentMessages(client, userId, {
+        endAt: selectedDayEndAt,
+        limit: 20,
+        startAt: selectedDayStartAt
+      });
+    const selectedDayRecentVoiceSessions = selectedDateIsToday
+      ? todayRecentVoiceSessions
+      : await getRecentVoiceSessions(client, userId, {
+        endAt: selectedDayEndAt,
+        limit: 20,
+        startAt: selectedDayStartAt
+      });
 
     return {
-      user,
       coverage,
       trackedRange: {
         firstActivityDate: trackedStartDate,
@@ -255,14 +238,6 @@ async function getDashboardAnalytics(userId, requestedDate) {
         lifetime: {
           summary: mapSummary(lifetimeSummary),
           trend: lifetimeTrend,
-          comparison: {
-            trackedDayCount,
-            recentWindowDays: 7,
-            peers: {
-              lifetime: mapLifetimePeerRows(peerLifetimeEngagement, userId),
-              daily: mapDailyPeerRows(peerRecentDailyEngagement, userId)
-            }
-          },
           leaderboards: {
             chatChannels: mapChatLeaderboard(lifetimeChatChannels),
             voiceChannels: mapVoiceLeaderboard(lifetimeVoiceChannels)

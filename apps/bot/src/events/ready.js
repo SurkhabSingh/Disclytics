@@ -9,7 +9,8 @@ function createReadyHandler({ backendClient, logger, voiceTrackingService }) {
     });
     await registerSlashCommands(client, logger);
     await syncTrackedGuilds(client, backendClient);
-    await voiceTrackingService.reconcileFromGateway(client);
+    await voiceTrackingService.reconcileFromGateway(client, "ready");
+    voiceTrackingService.startBackgroundSync(client);
   };
 }
 

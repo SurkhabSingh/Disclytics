@@ -116,6 +116,28 @@ async function stopActiveVoiceSession(client, session) {
   return rows[0] || null;
 }
 
+async function touchActiveVoiceSession(client, session) {
+  const { rows } = await client.query(
+    `
+      UPDATE voice_sessions
+      SET updated_at = GREATEST(updated_at, $4::TIMESTAMPTZ)
+      WHERE discord_user_id = $1
+        AND discord_guild_id = $2
+        AND discord_channel_id = $3
+        AND end_time IS NULL
+      RETURNING *
+    `,
+    [
+      session.userId,
+      session.guildId,
+      session.channelId,
+      session.observedAt
+    ]
+  );
+
+  return rows[0] || null;
+}
+
 async function listActiveVoiceSessions(client) {
   const { rows } = await client.query(
     `
@@ -131,5 +153,6 @@ async function listActiveVoiceSessions(client) {
 module.exports = {
   listActiveVoiceSessions,
   startVoiceSession,
-  stopActiveVoiceSession
+  stopActiveVoiceSession,
+  touchActiveVoiceSession
 };
