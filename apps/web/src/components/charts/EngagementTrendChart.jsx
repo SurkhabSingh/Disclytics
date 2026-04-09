@@ -9,14 +9,11 @@ import {
   YAxis
 } from "recharts";
 
-import { formatVoiceAxisDuration, formatVoiceDuration } from "../../utils/engagement";
-
-function formatDayLabel(value) {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric"
-  }).format(new Date(value));
-}
+import {
+  formatLocalCalendarDate,
+  formatVoiceAxisDuration,
+  formatVoiceDuration
+} from "../../utils/engagement";
 
 function TrendTooltip({ active, metric, payload }) {
   if (!active || !payload?.length) {
@@ -24,7 +21,7 @@ function TrendTooltip({ active, metric, payload }) {
   }
 
   const point = payload[0].payload;
-  const label = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(point.date));
+  const label = formatLocalCalendarDate(point.date, { dateStyle: "medium" });
   const value = metric === "voice"
     ? formatVoiceDuration(point.totalVoiceSeconds)
     : `${point.totalMessages} messages`;
@@ -42,7 +39,10 @@ export const EngagementTrendChart = memo(function EngagementTrendChart({ data, t
   const chartData = useMemo(
     () => (data || []).map((item) => ({
       ...item,
-      label: formatDayLabel(item.date)
+      label: formatLocalCalendarDate(item.date, {
+        month: "short",
+        day: "numeric"
+      })
     })),
     [data]
   );
@@ -76,7 +76,7 @@ export const EngagementTrendChart = memo(function EngagementTrendChart({ data, t
         </div>
       </div>
       <p className="chart-copy">
-        Switch the metric to see how your messaging and voice participation evolve over time.
+        Switch between messages and voice time to compare your activity day by day in your local timezone.
       </p>
       <div className="chart-shell">
         <ResponsiveContainer width="100%" height={320}>
@@ -102,7 +102,7 @@ export const EngagementTrendChart = memo(function EngagementTrendChart({ data, t
               name={metric === "voice" ? "Voice time" : "Messages"}
               stroke={metric === "voice" ? "var(--chart-line)" : "var(--chart-bar)"}
               strokeWidth={3}
-              type="monotone"
+              type="linear"
             />
           </LineChart>
         </ResponsiveContainer>

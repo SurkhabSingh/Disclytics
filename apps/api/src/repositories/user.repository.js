@@ -44,6 +44,22 @@ async function getUserById(client, userId) {
   return rows[0] || null;
 }
 
+async function updateUserTimezone(client, userId, timezone) {
+  const { rows } = await client.query(
+    `
+      UPDATE users
+      SET
+        timezone = $2,
+        updated_at = NOW()
+      WHERE discord_user_id = $1
+      RETURNING *
+    `,
+    [userId, timezone]
+  );
+
+  return rows[0] || null;
+}
+
 async function getUserGuilds(client, userId) {
   const { rows } = await client.query(
     `
@@ -105,5 +121,6 @@ module.exports = {
   getUserById,
   getUserGuilds,
   replaceUserGuilds,
+  updateUserTimezone,
   upsertUser
 };

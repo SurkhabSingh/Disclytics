@@ -29,3 +29,25 @@ export function calculateDailyAverages(summary, trackedDayCount) {
     avgVoiceSecondsPerDay: Number(summary?.totalVoiceSeconds || 0) / safeDayCount
   };
 }
+
+function createStableDateForDisplay(dateValue) {
+  if (typeof dateValue !== "string") {
+    return null;
+  }
+
+  const [year, month, day] = dateValue.split("-").map((part) => Number(part));
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+export function formatLocalCalendarDate(dateValue, options) {
+  const stableDate = createStableDateForDisplay(dateValue);
+  if (!stableDate) {
+    return dateValue || "";
+  }
+
+  return new Intl.DateTimeFormat(undefined, options).format(stableDate);
+}

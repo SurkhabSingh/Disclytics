@@ -3,6 +3,14 @@ const API_REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_API_REQUEST_TIMEOUT_M
 const DEFAULT_SAFE_GET_RETRIES = 1;
 const RETRYABLE_METHODS = new Set(["GET", "HEAD"]);
 
+function getBrowserTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 function isRetryableRequest(method, error, externalSignal) {
   if (!RETRYABLE_METHODS.has(method) || externalSignal?.aborted) {
     return false;
@@ -131,9 +139,14 @@ export const authApi = {
 export const analyticsApi = {
   getDashboard(selectedDate = null, options = {}) {
     const params = new URLSearchParams();
+    const timezone = getBrowserTimezone();
 
     if (selectedDate) {
       params.set("selectedDate", selectedDate);
+    }
+
+    if (timezone) {
+      params.set("timezone", timezone);
     }
 
     const suffix = params.toString() ? `?${params.toString()}` : "";

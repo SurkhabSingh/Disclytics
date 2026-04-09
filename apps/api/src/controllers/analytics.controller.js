@@ -7,7 +7,10 @@ async function getDashboard(req, res) {
   )
     ? req.query.selectedDate
     : null;
-  const dashboard = await getDashboardAnalytics(req.auth.userId, selectedDate);
+  const timezone = typeof req.query.timezone === "string" && req.query.timezone.trim()
+    ? req.query.timezone.trim()
+    : null;
+  const dashboard = await getDashboardAnalytics(req.auth.userId, selectedDate, timezone);
   res.set("Cache-Control", "no-store");
   res.json(dashboard);
 }

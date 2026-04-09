@@ -1,24 +1,28 @@
 import { memo } from "react";
 import {
-  Area,
-  AreaChart,
   CartesianGrid,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
-  YAxis,
+  YAxis
 } from "recharts";
 
-function formatDuration(seconds) {
-  const totalMinutes = Math.floor(Math.max(0, Number(seconds || 0)) / 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const remainingMinutes = totalMinutes % 60;
+function padHour(value) {
+  return String(value).padStart(2, "0");
+}
 
-  if (hours <= 0) {
-    return `${remainingMinutes} min`;
-  }
+function formatHourLabel(hourOfDay) {
+  return `${padHour(hourOfDay)}:00`;
+}
 
-  return `${hours}h ${remainingMinutes}m`;
+function formatHourRange(hourOfDay) {
+  return `${padHour(hourOfDay)}:00 - ${padHour(hourOfDay)}:59`;
+}
+
+function formatVoiceMinutes(value) {
+  return `${Math.max(0, Math.round(Number(value || 0)))} min`;
 }
 
 function getSafeUpperBound(dataKey) {
@@ -26,11 +30,29 @@ function getSafeUpperBound(dataKey) {
     const numericMax = Number(dataMax || 0);
 
     if (dataKey === "messages") {
-      return Math.max(Math.ceil(numericMax * 1.2), 5);
+      return Math.max(Math.ceil(numericMax * 1.15), 5);
     }
 
-    return Math.max(Math.ceil((numericMax * 1.2) / 1800) * 1800, 1800);
+    return Math.max(Math.ceil((numericMax * 1.15) / 15) * 15, 15);
   };
+}
+
+function HourlyTooltip({ active, metricLabel, payload }) {
+  if (!active || !payload?.length) {
+    return null;
+  }
+
+  const point = payload[0].payload;
+  const value = metricLabel === "Voice time"
+    ? formatVoiceMinutes(point.voiceMinutes)
+    : `${point.totalMessages} messages`;
+
+  return (
+    <div className="chart-tooltip-card">
+      <p className="chart-tooltip-title">{point.hourRangeLabel}</p>
+      <p className="chart-tooltip-line">{value}</p>
+    </div>
+  );
 }
 
 export const HourlyUsageChart = memo(function HourlyUsageChart({
@@ -39,9 +61,10 @@ export const HourlyUsageChart = memo(function HourlyUsageChart({
 }) {
   const chartData = (data || []).map((item) => ({
     ...item,
-    displayHour: item.hourOfDay + 1,
-    voiceSeconds: Number(item.totalVoiceSeconds || 0),
+    hourLabel: formatHourLabel(item.hourOfDay),
+    hourRangeLabel: formatHourRange(item.hourOfDay),
     totalMessages: Number(item.totalMessages || 0),
+    voiceMinutes: Math.round(Math.max(0, Number(item.totalVoiceSeconds || 0)) / 60),
   }));
 
   return (
@@ -51,8 +74,8 @@ export const HourlyUsageChart = memo(function HourlyUsageChart({
           <p className="eyebrow">Day View</p>
           <p className="panel-title">
             {selectedDate
-              ? `Hourly activity for ${selectedDate}`
-              : "Hourly activity"}
+              ? `Local hourly activity for ${selectedDate}`
+              : "Local hourly activity"}
           </p>
         </div>
       </div>
@@ -61,65 +84,39 @@ export const HourlyUsageChart = memo(function HourlyUsageChart({
         <section className="chart-block">
           <div className="chart-block-header">
             <div>
-              <p className="chart-block-kicker">Messages</p>
+              <p className="chart-block-kicker">Messages per hour</p>
             </div>
           </div>
           <div className="chart-shell chart-shell-compact">
             <ResponsiveContainer width="100%" height={190}>
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient
-                    id="messageHourlyFill"
-                    x1="0"
-                    x2="0"
-                    y1="0"
-                    y2="1"
-                  >
-                    <stop
-                      offset="5%"
-                      stopColor="var(--chart-bar)"
-                      stopOpacity={0.24}
-                    />
-                    <stop
-                      offset="95%"
-                      stopColor="var(--chart-bar)"
-                      stopOpacity={0.02}
-                    />
-                  </linearGradient>
-                </defs>
+              <LineChart data={chartData}>
                 <CartesianGrid
                   strokeDasharray="3 3"
                   stroke="var(--chart-grid)"
                 />
-                <XAxis dataKey="displayHour" ticks={[4, 8, 12, 16, 20, 24]} />
+                <XAxis
+                  dataKey="hourOfDay"
+                  ticks={[0, 4, 8, 12, 16, 20]}
+                  tickFormatter={formatHourLabel}
+                />
                 <YAxis
                   allowDecimals={false}
                   domain={[0, getSafeUpperBound("messages")]}
                 />
                 <Tooltip
-                  contentStyle={{
-                    backgroundColor: "var(--tooltip-bg)",
-                    border: "1px solid var(--tooltip-border)",
-                    borderRadius: "10px",
-                    color: "var(--tooltip-text)",
-                  }}
-                  formatter={(value) => [`${value} messages`, "Messages"]}
-                  itemStyle={{ color: "var(--tooltip-text)" }}
-                  labelFormatter={(value) => `Hour ending ${value}:00`}
-                  labelStyle={{ color: "var(--tooltip-text)" }}
+                  content={<HourlyTooltip metricLabel="Messages" />}
                   wrapperStyle={{ outline: "none" }}
                 />
-                <Area
-                  type="monotone"
+                <Line
+                  activeDot={{ r: 5, fill: "var(--chart-bar)" }}
                   dataKey="totalMessages"
+                  dot={false}
                   name="Messages"
                   stroke="var(--chart-bar)"
                   strokeWidth={3}
-                  fill="url(#messageHourlyFill)"
-                  dot={false}
-                  activeDot={{ r: 5, fill: "var(--chart-bar)" }}
+                  type="stepAfter"
                 />
-              </AreaChart>
+              </LineChart>
             </ResponsiveContainer>
           </div>
         </section>
@@ -127,66 +124,40 @@ export const HourlyUsageChart = memo(function HourlyUsageChart({
         <section className="chart-block">
           <div className="chart-block-header">
             <div>
-              <p className="chart-block-kicker">Voice</p>
+              <p className="chart-block-kicker">Voice minutes per hour</p>
             </div>
           </div>
           <div className="chart-shell chart-shell-compact">
             <ResponsiveContainer width="100%" height={190}>
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient
-                    id="voiceHourlyFill"
-                    x1="0"
-                    x2="0"
-                    y1="0"
-                    y2="1"
-                  >
-                    <stop
-                      offset="5%"
-                      stopColor="var(--chart-line)"
-                      stopOpacity={0.28}
-                    />
-                    <stop
-                      offset="95%"
-                      stopColor="var(--chart-line)"
-                      stopOpacity={0.02}
-                    />
-                  </linearGradient>
-                </defs>
+              <LineChart data={chartData}>
                 <CartesianGrid
                   strokeDasharray="3 3"
                   stroke="var(--chart-grid)"
                 />
-                <XAxis dataKey="displayHour" ticks={[4, 8, 12, 16, 20, 24]} />
+                <XAxis
+                  dataKey="hourOfDay"
+                  ticks={[0, 4, 8, 12, 16, 20]}
+                  tickFormatter={formatHourLabel}
+                />
                 <YAxis
                   allowDecimals={false}
                   domain={[0, getSafeUpperBound("voice")]}
-                  tickFormatter={(value) => formatDuration(value)}
+                  tickFormatter={formatVoiceMinutes}
                 />
                 <Tooltip
-                  contentStyle={{
-                    backgroundColor: "var(--tooltip-bg)",
-                    border: "1px solid var(--tooltip-border)",
-                    borderRadius: "10px",
-                    color: "var(--tooltip-text)",
-                  }}
-                  formatter={(value) => [formatDuration(value), "Voice time"]}
-                  itemStyle={{ color: "var(--tooltip-text)" }}
-                  labelFormatter={(value) => `Hour ending ${value}:00`}
-                  labelStyle={{ color: "var(--tooltip-text)" }}
+                  content={<HourlyTooltip metricLabel="Voice time" />}
                   wrapperStyle={{ outline: "none" }}
                 />
-                <Area
-                  type="monotone"
-                  dataKey="voiceSeconds"
+                <Line
+                  activeDot={{ r: 5, fill: "var(--chart-line)" }}
+                  dataKey="voiceMinutes"
+                  dot={false}
                   name="Voice time"
                   stroke="var(--chart-line)"
                   strokeWidth={3}
-                  fill="url(#voiceHourlyFill)"
-                  dot={false}
-                  activeDot={{ r: 5, fill: "var(--chart-line)" }}
+                  type="stepAfter"
                 />
-              </AreaChart>
+              </LineChart>
             </ResponsiveContainer>
           </div>
         </section>

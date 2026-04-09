@@ -28,21 +28,21 @@ async function getCoverage(client, userId) {
   };
 }
 
-async function getTrackedDateBounds(client, userId) {
+async function getTrackedDateBounds(client, userId, timezone) {
   const { rows } = await client.query(
     `
       WITH message_bounds AS (
         SELECT
-          MIN(DATE(occurred_at)) AS first_date,
-          MAX(DATE(occurred_at)) AS last_date
+          MIN(DATE(occurred_at AT TIME ZONE $2)) AS first_date,
+          MAX(DATE(occurred_at AT TIME ZONE $2)) AS last_date
         FROM events
         WHERE discord_user_id = $1
           AND type = 'message'
       ),
       voice_bounds AS (
         SELECT
-          MIN(DATE(start_time)) AS first_date,
-          MAX(DATE(${EFFECTIVE_VOICE_END})) AS last_date
+          MIN(DATE(start_time AT TIME ZONE $2)) AS first_date,
+          MAX(DATE(${EFFECTIVE_VOICE_END} AT TIME ZONE $2)) AS last_date
         FROM voice_sessions
         WHERE discord_user_id = $1
       )
@@ -59,7 +59,7 @@ async function getTrackedDateBounds(client, userId) {
         END AS last_activity_date
       FROM message_bounds, voice_bounds
     `,
-    [userId]
+    [userId, timezone]
   );
 
   return rows[0] || {
@@ -68,7 +68,7 @@ async function getTrackedDateBounds(client, userId) {
   };
 }
 
-async function getLifetimeTrend(client, userId, startDate) {
+async function getLifetimeTrend(client, userId, startDate, endDate, timezone) {
   if (!startDate) {
     return [];
   }
@@ -78,19 +78,20 @@ async function getLifetimeTrend(client, userId, startDate) {
       WITH day_series AS (
         SELECT generate_series(
           $2::DATE,
-          CURRENT_DATE,
+          $3::DATE,
           INTERVAL '1 day'
         )::DATE AS stat_date
       ),
       messages AS (
         SELECT
-          DATE(occurred_at) AS stat_date,
+          DATE(occurred_at AT TIME ZONE $4) AS stat_date,
           COUNT(*)::INTEGER AS total_messages
         FROM events
         WHERE discord_user_id = $1
           AND type = 'message'
-          AND occurred_at >= $2::DATE
-        GROUP BY DATE(occurred_at)
+          AND occurred_at >= ($2::DATE::TIMESTAMP AT TIME ZONE $4)
+          AND occurred_at < (($3::DATE + INTERVAL '1 day')::TIMESTAMP AT TIME ZONE $4)
+        GROUP BY DATE(occurred_at AT TIME ZONE $4)
       ),
       voice AS (
         SELECT
@@ -100,18 +101,24 @@ async function getLifetimeTrend(client, userId, startDate) {
               0,
               EXTRACT(EPOCH FROM (
                 LEAST(
-                  LEAST(${EFFECTIVE_VOICE_END_VS}, ds.stat_date + INTERVAL '1 day'),
-                  ds.stat_date + INTERVAL '1 day'
+                  LEAST(
+                    ${EFFECTIVE_VOICE_END_VS},
+                    ((ds.stat_date + INTERVAL '1 day')::TIMESTAMP AT TIME ZONE $4)
+                  ),
+                  ((ds.stat_date + INTERVAL '1 day')::TIMESTAMP AT TIME ZONE $4)
                 ) -
-                GREATEST(vs.start_time, ds.stat_date)
+                GREATEST(vs.start_time, (ds.stat_date::TIMESTAMP AT TIME ZONE $4))
               ))
             )
           ), 0)::INTEGER AS total_voice_seconds
         FROM day_series ds
         LEFT JOIN voice_sessions vs
           ON vs.discord_user_id = $1
-          AND vs.start_time < ds.stat_date + INTERVAL '1 day'
-          AND LEAST(${EFFECTIVE_VOICE_END_VS}, ds.stat_date + INTERVAL '1 day') > ds.stat_date
+          AND vs.start_time < ((ds.stat_date + INTERVAL '1 day')::TIMESTAMP AT TIME ZONE $4)
+          AND LEAST(
+            ${EFFECTIVE_VOICE_END_VS},
+            ((ds.stat_date + INTERVAL '1 day')::TIMESTAMP AT TIME ZONE $4)
+          ) > (ds.stat_date::TIMESTAMP AT TIME ZONE $4)
         GROUP BY ds.stat_date
       )
       SELECT
@@ -123,7 +130,7 @@ async function getLifetimeTrend(client, userId, startDate) {
       LEFT JOIN voice ON voice.stat_date = ds.stat_date
       ORDER BY ds.stat_date ASC
     `,
-    [userId, startDate]
+    [userId, startDate, endDate, timezone]
   );
 
   return rows;
@@ -247,12 +254,12 @@ async function getTopVoiceChannels(client, userId, startAt, endAt, limit = 8) {
   return rows;
 }
 
-async function getHeatmap(client, userId, startAt, endAt) {
+async function getHeatmap(client, userId, startAt, endAt, timezone) {
   const { rows } = await client.query(
     `
       SELECT
-        EXTRACT(DOW FROM occurred_at)::INTEGER AS day_of_week,
-        EXTRACT(HOUR FROM occurred_at)::INTEGER AS hour_of_day,
+        EXTRACT(DOW FROM occurred_at AT TIME ZONE $4)::INTEGER AS day_of_week,
+        EXTRACT(HOUR FROM occurred_at AT TIME ZONE $4)::INTEGER AS hour_of_day,
         COUNT(*)::INTEGER AS event_count
       FROM events
       WHERE discord_user_id = $1
@@ -261,13 +268,13 @@ async function getHeatmap(client, userId, startAt, endAt) {
       GROUP BY day_of_week, hour_of_day
       ORDER BY day_of_week ASC, hour_of_day ASC
     `,
-    [userId, startAt, endAt]
+    [userId, startAt, endAt, timezone]
   );
 
   return rows;
 }
 
-async function getHourlyBreakdown(client, userId, selectedDate) {
+async function getHourlyBreakdown(client, userId, selectedDate, timezone) {
   const { rows } = await client.query(
     `
       WITH hour_series AS (
@@ -277,20 +284,20 @@ async function getHourlyBreakdown(client, userId, selectedDate) {
       hour_windows AS (
         SELECT
           hour_of_day,
-          ($2::DATE + make_interval(hours => hour_of_day)) AS hour_start,
-          ($2::DATE + make_interval(hours => hour_of_day + 1)) AS hour_end
+          (($2::DATE + make_interval(hours => hour_of_day))::TIMESTAMP AT TIME ZONE $3) AS hour_start,
+          (($2::DATE + make_interval(hours => hour_of_day + 1))::TIMESTAMP AT TIME ZONE $3) AS hour_end
         FROM hour_series
       ),
       messages AS (
         SELECT
-          EXTRACT(HOUR FROM occurred_at)::INTEGER AS hour_of_day,
+          EXTRACT(HOUR FROM occurred_at AT TIME ZONE $3)::INTEGER AS hour_of_day,
           COUNT(*)::INTEGER AS total_messages
         FROM events
         WHERE discord_user_id = $1
           AND type = 'message'
-          AND occurred_at >= $2::DATE
-          AND occurred_at < ($2::DATE + INTERVAL '1 day')
-        GROUP BY EXTRACT(HOUR FROM occurred_at)
+          AND occurred_at >= ($2::DATE::TIMESTAMP AT TIME ZONE $3)
+          AND occurred_at < (($2::DATE + INTERVAL '1 day')::TIMESTAMP AT TIME ZONE $3)
+        GROUP BY EXTRACT(HOUR FROM occurred_at AT TIME ZONE $3)
       ),
       voice AS (
         SELECT
@@ -320,7 +327,7 @@ async function getHourlyBreakdown(client, userId, selectedDate) {
       LEFT JOIN voice ON voice.hour_of_day = hw.hour_of_day
       ORDER BY hw.hour_of_day ASC
     `,
-    [userId, selectedDate]
+    [userId, selectedDate, timezone]
   );
 
   return rows;

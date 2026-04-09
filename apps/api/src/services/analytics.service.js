@@ -1,3 +1,4 @@
+const { DateTime, IANAZone } = require("luxon");
 const { pool } = require("../db/pool");
 const {
   getCoverage,
@@ -12,23 +13,45 @@ const {
   getTopVoiceChannels,
   getTrackedDateBounds
 } = require("../repositories/analytics.repository");
+const { getUserById, updateUserTimezone } = require("../repositories/user.repository");
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
 function isoDate(value) {
-  return value ? new Date(value).toISOString().slice(0, 10) : null;
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+
+  const dateTime = DateTime.fromJSDate(new Date(value), { zone: "utc" });
+  return dateTime.isValid ? dateTime.toISODate() : null;
 }
 
-function startOfDayUtc(dateValue) {
-  return `${dateValue}T00:00:00.000Z`;
+function resolveAnalyticsTimezone(requestedTimezone, storedTimezone) {
+  if (typeof requestedTimezone === "string" && IANAZone.isValidZone(requestedTimezone)) {
+    return requestedTimezone;
+  }
+
+  if (typeof storedTimezone === "string" && IANAZone.isValidZone(storedTimezone)) {
+    return storedTimezone;
+  }
+
+  return "UTC";
 }
 
-function nextDayUtc(dateValue) {
-  const start = new Date(startOfDayUtc(dateValue));
-  start.setUTCDate(start.getUTCDate() + 1);
-  return start.toISOString();
+function getDayWindow(dateValue, timezone) {
+  const dayStart = DateTime.fromISO(dateValue, { zone: timezone }).startOf("day");
+  const dayEnd = dayStart.plus({ days: 1 });
+
+  return {
+    startAt: dayStart.toUTC().toISO(),
+    endAt: dayEnd.toUTC().toISO()
+  };
 }
 
 function pickSelectedDate(requestedDate, availableDates, fallbackDate) {
@@ -138,29 +161,46 @@ function mapTrendRows(rows) {
   }));
 }
 
-async function getDashboardAnalytics(userId, requestedDate) {
+async function getDashboardAnalytics(userId, requestedDate, requestedTimezone) {
   const client = await pool.connect();
 
   try {
+    const user = await getUserById(client, userId);
+    const analyticsTimezone = resolveAnalyticsTimezone(requestedTimezone, user?.timezone);
+
+    if (user && user.timezone !== analyticsTimezone) {
+      await updateUserTimezone(client, userId, analyticsTimezone);
+    }
+
+    const now = DateTime.now().setZone(analyticsTimezone);
+    const today = now.toISODate();
     const coverage = await getCoverage(client, userId);
-    const trackedBounds = await getTrackedDateBounds(client, userId);
+    const trackedBounds = await getTrackedDateBounds(client, userId, analyticsTimezone);
 
     const trackedStartDate = isoDate(trackedBounds.first_activity_date);
     const lastActivityDate = isoDate(trackedBounds.last_activity_date);
-    const today = new Date().toISOString().slice(0, 10);
-    const lifetimeTrendRows = await getLifetimeTrend(client, userId, trackedStartDate);
+    const lifetimeTrendRows = await getLifetimeTrend(
+      client,
+      userId,
+      trackedStartDate,
+      today,
+      analyticsTimezone
+    );
     const lifetimeTrend = mapTrendRows(lifetimeTrendRows);
     const availableDates = lifetimeTrend
       .filter((row) => row.totalMessages > 0 || row.totalVoiceSeconds > 0)
       .map((row) => row.date)
       .reverse();
     const selectedDate = pickSelectedDate(requestedDate, availableDates, lastActivityDate || today);
-    const lifetimeStartAt = startOfDayUtc(trackedStartDate || today);
-    const lifetimeEndAt = new Date().toISOString();
-    const todayStartAt = startOfDayUtc(today);
-    const todayEndAt = new Date().toISOString();
-    const selectedDayStartAt = startOfDayUtc(selectedDate);
-    const selectedDayEndAt = nextDayUtc(selectedDate);
+    const lifetimeWindow = getDayWindow(trackedStartDate || today, analyticsTimezone);
+    const todayWindow = getDayWindow(today, analyticsTimezone);
+    const selectedDayWindow = getDayWindow(selectedDate, analyticsTimezone);
+    const lifetimeStartAt = lifetimeWindow.startAt;
+    const lifetimeEndAt = now.toUTC().toISO();
+    const todayStartAt = todayWindow.startAt;
+    const todayEndAt = todayWindow.endAt;
+    const selectedDayStartAt = selectedDayWindow.startAt;
+    const selectedDayEndAt = selectedDayWindow.endAt;
     const selectedDateIsToday = selectedDate === today;
 
     const lifetimeSummary = await getScopedSummary(client, userId, lifetimeStartAt, lifetimeEndAt);
@@ -169,8 +209,8 @@ async function getDashboardAnalytics(userId, requestedDate) {
     const todayChatChannels = await getTopChatChannels(client, userId, todayStartAt, todayEndAt, 8);
     const lifetimeVoiceChannels = await getTopVoiceChannels(client, userId, lifetimeStartAt, lifetimeEndAt, 8);
     const todayVoiceChannels = await getTopVoiceChannels(client, userId, todayStartAt, todayEndAt, 8);
-    const heatmapRows = await getHeatmap(client, userId, lifetimeStartAt, lifetimeEndAt);
-    const todayHourlyBreakdownRows = await getHourlyBreakdown(client, userId, today);
+    const heatmapRows = await getHeatmap(client, userId, lifetimeStartAt, lifetimeEndAt, analyticsTimezone);
+    const todayHourlyBreakdownRows = await getHourlyBreakdown(client, userId, today, analyticsTimezone);
     const lifetimeRecentMessages = await getRecentMessages(client, userId, { limit: 20 });
     const todayRecentMessages = await getRecentMessages(client, userId, {
       endAt: todayEndAt,
@@ -194,7 +234,7 @@ async function getDashboardAnalytics(userId, requestedDate) {
       : await getTopVoiceChannels(client, userId, selectedDayStartAt, selectedDayEndAt, 8);
     const historyHourlyBreakdownRows = selectedDateIsToday
       ? todayHourlyBreakdownRows
-      : await getHourlyBreakdown(client, userId, selectedDate);
+      : await getHourlyBreakdown(client, userId, selectedDate, analyticsTimezone);
     const selectedDayRecentMessages = selectedDateIsToday
       ? todayRecentMessages
       : await getRecentMessages(client, userId, {
@@ -216,6 +256,7 @@ async function getDashboardAnalytics(userId, requestedDate) {
         firstActivityDate: trackedStartDate,
         lastActivityDate
       },
+      timezone: analyticsTimezone,
       selectedDate,
       todayDate: today,
       availableDates,
