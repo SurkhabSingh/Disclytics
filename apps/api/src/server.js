@@ -8,8 +8,9 @@ async function startServer() {
   await pool.query("SELECT 1");
 
   const app = createApp();
-  const server = app.listen(env.PORT, () => {
+  const server = app.listen(env.PORT, env.HOST, () => {
     logger.info("API listening", {
+      host: env.HOST,
       port: env.PORT,
       nodeEnv: env.NODE_ENV
     });

@@ -10,6 +10,7 @@ const schema = z.object({
   LOG_LEVEL: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
+  HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().default(4000),
   JWT_SECRET: z.string().min(32),
   OAUTH_STATE_SECRET: z.string().min(32),
