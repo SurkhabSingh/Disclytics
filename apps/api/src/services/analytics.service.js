@@ -15,6 +15,10 @@ const {
 } = require("../repositories/analytics.repository");
 const { getUserById, updateUserTimezone } = require("../repositories/user.repository");
 
+const TIMEZONE_ALIASES = new Map([
+  ["Asia/Calcutta", "Asia/Kolkata"]
+]);
+
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -33,12 +37,47 @@ function isoDate(value) {
 }
 
 function resolveAnalyticsTimezone(requestedTimezone, storedTimezone) {
-  if (typeof requestedTimezone === "string" && IANAZone.isValidZone(requestedTimezone)) {
-    return requestedTimezone;
+  const normalizedRequestedTimezone = normalizeTimezoneId(requestedTimezone);
+  const normalizedStoredTimezone = normalizeTimezoneId(storedTimezone);
+
+  if (typeof normalizedRequestedTimezone === "string" && IANAZone.isValidZone(normalizedRequestedTimezone)) {
+    return normalizedRequestedTimezone;
   }
 
-  if (typeof storedTimezone === "string" && IANAZone.isValidZone(storedTimezone)) {
-    return storedTimezone;
+  if (typeof normalizedStoredTimezone === "string" && IANAZone.isValidZone(normalizedStoredTimezone)) {
+    return normalizedStoredTimezone;
+  }
+
+  return "UTC";
+}
+
+function normalizeTimezoneId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    return null;
+  }
+
+  return TIMEZONE_ALIASES.get(trimmedValue) || trimmedValue;
+}
+
+async function resolveDatabaseTimezone(client, requestedTimezone, storedTimezone) {
+  const candidateTimezones = [
+    resolveAnalyticsTimezone(requestedTimezone, storedTimezone),
+    resolveAnalyticsTimezone(null, storedTimezone),
+    "UTC"
+  ].filter((timezone, index, values) => timezone && values.indexOf(timezone) === index);
+
+  for (const timezone of candidateTimezones) {
+    try {
+      await client.query("SELECT NOW() AT TIME ZONE $1 AS local_time", [timezone]);
+      return timezone;
+    } catch {
+      continue;
+    }
   }
 
   return "UTC";
@@ -166,7 +205,7 @@ async function getDashboardAnalytics(userId, requestedDate, requestedTimezone) {
 
   try {
     const user = await getUserById(client, userId);
-    const analyticsTimezone = resolveAnalyticsTimezone(requestedTimezone, user?.timezone);
+    const analyticsTimezone = await resolveDatabaseTimezone(client, requestedTimezone, user?.timezone);
 
     if (user && user.timezone !== analyticsTimezone) {
       await updateUserTimezone(client, userId, analyticsTimezone);
