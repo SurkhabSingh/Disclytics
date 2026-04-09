@@ -2,11 +2,14 @@ node_modules/
 dist/
 build/
 .vite/
+AGENTS.md
+**/AGENTS.md
+SKILL.md
+logs.md
 .env
 .env.*
 !.env.example
 coverage/
-logs/
 .local/
 *.log
 *.tsbuildinfo

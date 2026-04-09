@@ -146,14 +146,6 @@ npm run dev:web
 http://localhost:4173
 ```
 
-## Optional Local Container Setup
-
-If you prefer running the stack with Docker:
-
-```powershell
-docker compose up --build postgres api worker bot web
-```
-
 ## Discord Setup Notes
 
 - The bot install flow should include `bot` and `applications.commands`.
