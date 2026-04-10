@@ -110,7 +110,8 @@ function normalizeScope(scope, options = {}) {
       voiceChannels: asArray(scope?.leaderboards?.voiceChannels).map((row) => normalizeLeaderboardItem(row, true))
     },
     recentMessages: asArray(scope?.recentMessages).map(normalizeMessageItem),
-    recentVoiceSessions: asArray(scope?.recentVoiceSessions).map(normalizeVoiceSession)
+    recentVoiceSessions: asArray(scope?.recentVoiceSessions).map(normalizeVoiceSession),
+    voiceSessionsForChart: asArray(scope?.voiceSessionsForChart).map(normalizeVoiceSession)
   };
 }
 

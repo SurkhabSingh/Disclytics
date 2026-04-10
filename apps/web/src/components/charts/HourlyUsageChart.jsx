@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import {
   Bar,
   BarChart,
@@ -25,6 +25,68 @@ function formatHourRange(hourOfDay) {
 
 function formatVoiceMinutes(value) {
   return `${Math.max(0, Math.round(Number(value || 0)))} min`;
+}
+
+function buildLocalDate(dateValue, hour = 0) {
+  if (typeof dateValue !== "string") {
+    return null;
+  }
+
+  const [year, month, day] = dateValue.split("-").map((part) => Number(part));
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  return new Date(year, month - 1, day, hour, 0, 0, 0);
+}
+
+function deriveVoiceBucketsFromSessions(selectedDate, voiceSessions) {
+  const dayStart = buildLocalDate(selectedDate, 0);
+  if (!dayStart) {
+    return Array.from({ length: 24 }, () => 0);
+  }
+
+  const dayEnd = buildLocalDate(selectedDate, 24);
+  const now = new Date();
+  const buckets = Array.from({ length: 24 }, () => 0);
+
+  for (const session of voiceSessions || []) {
+    const rawStart = session?.startTime ? new Date(session.startTime) : null;
+    const rawEnd = session?.endTime ? new Date(session.endTime) : now;
+
+    if (!rawStart || Number.isNaN(rawStart.getTime())) {
+      continue;
+    }
+
+    if (!rawEnd || Number.isNaN(rawEnd.getTime())) {
+      continue;
+    }
+
+    const clampedStart = new Date(Math.max(rawStart.getTime(), dayStart.getTime()));
+    const clampedEnd = new Date(
+      Math.min(rawEnd.getTime(), dayEnd.getTime(), now.getTime())
+    );
+
+    if (clampedEnd <= clampedStart) {
+      continue;
+    }
+
+    for (let hourOfDay = 0; hourOfDay < 24; hourOfDay += 1) {
+      const hourStart = buildLocalDate(selectedDate, hourOfDay);
+      const hourEnd = buildLocalDate(selectedDate, hourOfDay + 1);
+      const overlapMs = Math.max(
+        0,
+        Math.min(clampedEnd.getTime(), hourEnd.getTime()) -
+          Math.max(clampedStart.getTime(), hourStart.getTime())
+      );
+
+      if (overlapMs > 0) {
+        buckets[hourOfDay] += overlapMs / 1000;
+      }
+    }
+  }
+
+  return buckets;
 }
 
 function getSafeUpperBound(dataKey) {
@@ -60,14 +122,25 @@ function HourlyTooltip({ active, metricLabel, payload }) {
 export const HourlyUsageChart = memo(function HourlyUsageChart({
   data,
   selectedDate,
+  voiceSessions,
 }) {
-  const chartData = (data || []).map((item) => ({
-    ...item,
-    hourLabel: formatHourLabel(item.hourOfDay),
-    hourRangeLabel: formatHourRange(item.hourOfDay),
-    totalMessages: Number(item.totalMessages || 0),
-    voiceMinutes: Math.max(0, Number(item.totalVoiceSeconds || 0)) / 60,
-  }));
+  const chartData = useMemo(() => {
+    const fallbackVoiceSeconds = (data || []).map((item) =>
+      Math.max(0, Number(item.totalVoiceSeconds || 0))
+    );
+    const derivedVoiceSeconds = deriveVoiceBucketsFromSessions(selectedDate, voiceSessions);
+
+    return (data || []).map((item, index) => ({
+      ...item,
+      hourLabel: formatHourLabel(item.hourOfDay),
+      hourRangeLabel: formatHourRange(item.hourOfDay),
+      totalMessages: Number(item.totalMessages || 0),
+      voiceMinutes:
+        (voiceSessions?.length
+          ? derivedVoiceSeconds[index]
+          : fallbackVoiceSeconds[index]) / 60,
+    }));
+  }, [data, selectedDate, voiceSessions]);
 
   return (
     <section className="panel">

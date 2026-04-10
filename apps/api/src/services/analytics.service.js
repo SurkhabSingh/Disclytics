@@ -262,6 +262,11 @@ async function getDashboardAnalytics(userId, requestedDate, requestedTimezone) {
       limit: 20,
       startAt: todayStartAt
     });
+    const todayVoiceSessionsForChart = await getRecentVoiceSessions(client, userId, {
+      endAt: todayEndAt,
+      limit: 250,
+      startAt: todayStartAt
+    });
     const historySummary = selectedDateIsToday
       ? todaySummary
       : await getScopedSummary(client, userId, selectedDayStartAt, selectedDayEndAt);
@@ -286,6 +291,13 @@ async function getDashboardAnalytics(userId, requestedDate, requestedTimezone) {
       : await getRecentVoiceSessions(client, userId, {
         endAt: selectedDayEndAt,
         limit: 20,
+        startAt: selectedDayStartAt
+      });
+    const selectedDayVoiceSessionsForChart = selectedDateIsToday
+      ? todayVoiceSessionsForChart
+      : await getRecentVoiceSessions(client, userId, {
+        endAt: selectedDayEndAt,
+        limit: 250,
         startAt: selectedDayStartAt
       });
 
@@ -313,7 +325,8 @@ async function getDashboardAnalytics(userId, requestedDate, requestedTimezone) {
             voiceChannels: mapVoiceLeaderboard(todayVoiceChannels)
           },
           recentMessages: mapMessages(todayRecentMessages),
-          recentVoiceSessions: mapVoiceSessions(todayRecentVoiceSessions)
+          recentVoiceSessions: mapVoiceSessions(todayRecentVoiceSessions),
+          voiceSessionsForChart: mapVoiceSessions(todayVoiceSessionsForChart)
         },
         lifetime: {
           summary: mapSummary(lifetimeSummary),
@@ -338,7 +351,8 @@ async function getDashboardAnalytics(userId, requestedDate, requestedTimezone) {
             voiceChannels: mapVoiceLeaderboard(historyVoiceChannels)
           },
           recentMessages: mapMessages(selectedDayRecentMessages),
-          recentVoiceSessions: mapVoiceSessions(selectedDayRecentVoiceSessions)
+          recentVoiceSessions: mapVoiceSessions(selectedDayRecentVoiceSessions),
+          voiceSessionsForChart: mapVoiceSessions(selectedDayVoiceSessionsForChart)
         }
       },
       heatmap: heatmapRows.map((row) => ({

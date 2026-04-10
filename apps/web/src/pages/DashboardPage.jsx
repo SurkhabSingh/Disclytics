@@ -537,6 +537,7 @@ export function DashboardPage() {
           <HourlyUsageChart
             data={todayScope.hourlyBreakdown}
             selectedDate={dashboard.todayDate}
+            voiceSessions={todayScope.voiceSessionsForChart}
           />
           <LeaderboardPanel
             chatChannels={todayScope.leaderboards.chatChannels}
@@ -593,6 +594,7 @@ export function DashboardPage() {
           <HourlyUsageChart
             data={historyScope.hourlyBreakdown}
             selectedDate={dashboard.selectedDate}
+            voiceSessions={historyScope.voiceSessionsForChart}
           />
           <LeaderboardPanel
             chatChannels={historyScope.leaderboards.chatChannels}
