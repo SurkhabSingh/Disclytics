@@ -114,7 +114,7 @@ export const HourlyUsageChart = memo(function HourlyUsageChart({
                   name="Messages"
                   stroke="var(--chart-bar)"
                   strokeWidth={3}
-                  type="stepAfter"
+                  type="linear"
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -155,7 +155,7 @@ export const HourlyUsageChart = memo(function HourlyUsageChart({
                   name="Voice time"
                   stroke="var(--chart-line)"
                   strokeWidth={3}
-                  type="stepAfter"
+                  type="linear"
                 />
               </LineChart>
             </ResponsiveContainer>
