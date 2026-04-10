@@ -1,5 +1,7 @@
 import { memo } from "react";
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
   Line,
   LineChart,
@@ -64,7 +66,7 @@ export const HourlyUsageChart = memo(function HourlyUsageChart({
     hourLabel: formatHourLabel(item.hourOfDay),
     hourRangeLabel: formatHourRange(item.hourOfDay),
     totalMessages: Number(item.totalMessages || 0),
-    voiceMinutes: Math.round(Math.max(0, Number(item.totalVoiceSeconds || 0)) / 60),
+    voiceMinutes: Math.max(0, Number(item.totalVoiceSeconds || 0)) / 60,
   }));
 
   return (
@@ -129,7 +131,7 @@ export const HourlyUsageChart = memo(function HourlyUsageChart({
           </div>
           <div className="chart-shell chart-shell-compact">
             <ResponsiveContainer width="100%" height={190}>
-              <LineChart data={chartData}>
+              <BarChart data={chartData}>
                 <CartesianGrid
                   strokeDasharray="3 3"
                   stroke="var(--chart-grid)"
@@ -148,16 +150,13 @@ export const HourlyUsageChart = memo(function HourlyUsageChart({
                   content={<HourlyTooltip metricLabel="Voice time" />}
                   wrapperStyle={{ outline: "none" }}
                 />
-                <Line
-                  activeDot={{ r: 5, fill: "var(--chart-line)" }}
+                <Bar
                   dataKey="voiceMinutes"
-                  dot={false}
+                  fill="var(--chart-line)"
                   name="Voice time"
-                  stroke="var(--chart-line)"
-                  strokeWidth={3}
-                  type="linear"
+                  radius={[4, 4, 0, 0]}
                 />
-              </LineChart>
+              </BarChart>
             </ResponsiveContainer>
           </div>
         </section>
