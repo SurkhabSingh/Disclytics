@@ -281,6 +281,11 @@ async function getHourlyBreakdown(client, userId, selectedDate, timezone) {
         SELECT
           generate_series(0, 23) AS hour_of_day
       ),
+      day_window AS (
+        SELECT
+          ($2::DATE::TIMESTAMP AT TIME ZONE $3) AS day_start,
+          (($2::DATE + INTERVAL '1 day')::TIMESTAMP AT TIME ZONE $3) AS day_end
+      ),
       hour_windows AS (
         SELECT
           hour_of_day,
@@ -299,6 +304,32 @@ async function getHourlyBreakdown(client, userId, selectedDate, timezone) {
           AND occurred_at < (($2::DATE + INTERVAL '1 day')::TIMESTAMP AT TIME ZONE $3)
         GROUP BY EXTRACT(HOUR FROM occurred_at AT TIME ZONE $3)
       ),
+      scoped_voice_sessions AS (
+        SELECT
+          GREATEST(vs.start_time, day_window.day_start) AS effective_start,
+          LEAST(
+            ${EFFECTIVE_VOICE_END_VS},
+            COALESCE(next_voice_event.next_event_at, ${EFFECTIVE_VOICE_END_VS}),
+            day_window.day_end
+          ) AS effective_end
+        FROM day_window
+        JOIN voice_sessions vs
+          ON vs.discord_user_id = $1
+          AND vs.start_time < day_window.day_end
+        LEFT JOIN LATERAL (
+          SELECT MIN(e.occurred_at) AS next_event_at
+          FROM events e
+          WHERE e.discord_user_id = vs.discord_user_id
+            AND e.discord_guild_id = vs.discord_guild_id
+            AND e.type IN ('voice_join', 'voice_leave', 'voice_switch')
+            AND e.occurred_at > vs.start_time
+        ) next_voice_event ON TRUE
+        WHERE LEAST(
+          ${EFFECTIVE_VOICE_END_VS},
+          COALESCE(next_voice_event.next_event_at, ${EFFECTIVE_VOICE_END_VS}),
+          day_window.day_end
+        ) > day_window.day_start
+      ),
       voice AS (
         SELECT
           hw.hour_of_day,
@@ -306,16 +337,15 @@ async function getHourlyBreakdown(client, userId, selectedDate, timezone) {
             GREATEST(
               0,
               EXTRACT(EPOCH FROM (
-                LEAST(${EFFECTIVE_VOICE_END_VS}, hw.hour_end) -
-                GREATEST(vs.start_time, hw.hour_start)
+                LEAST(vs.effective_end, hw.hour_end) -
+                GREATEST(vs.effective_start, hw.hour_start)
               ))
             )
           ), 0)::INTEGER AS total_voice_seconds
         FROM hour_windows hw
-        LEFT JOIN voice_sessions vs
-          ON vs.discord_user_id = $1
-          AND vs.start_time < hw.hour_end
-          AND LEAST(${EFFECTIVE_VOICE_END_VS}, hw.hour_end) > hw.hour_start
+        LEFT JOIN scoped_voice_sessions vs
+          ON vs.effective_start < hw.hour_end
+          AND vs.effective_end > hw.hour_start
         GROUP BY hw.hour_of_day
       )
       SELECT
