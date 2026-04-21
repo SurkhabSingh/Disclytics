@@ -1,4 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   FiArrowRight,
   FiBell,
@@ -12,7 +17,16 @@ import {
   FiSun,
 } from "react-icons/fi";
 
-import { analyticsApi, authApi, remindersApi } from "../api/client";
+import { authApi, remindersApi } from "../api/client";
+import {
+  dashboardQueryKeys,
+  getDashboardTimezone,
+  getHistoryQueryOptions,
+  getLifetimeQueryOptions,
+  getOverviewQueryOptions,
+  getRemindersQueryOptions,
+  getSessionQueryOptions,
+} from "../api/queryOptions";
 import { ActivityDetailsPanel } from "../components/ActivityDetailsPanel";
 import { EngagementKpiGrid } from "../components/EngagementKpiGrid";
 import { HistoryCalendar } from "../components/HistoryCalendar";
@@ -24,9 +38,6 @@ import { EngagementTrendChart } from "../components/charts/EngagementTrendChart"
 import { HourlyUsageChart } from "../components/charts/HourlyUsageChart";
 import {
   createEmptyScope,
-  normalizeHistoryPayload,
-  normalizeLifetimePayload,
-  normalizeOverviewPayload,
 } from "../features/analytics/dashboardModel";
 
 const THEME_STORAGE_KEY = "disclytics-theme";
@@ -252,6 +263,26 @@ function createDashboardStateShell() {
   };
 }
 
+function mergeTrackedRange(...trackedRanges) {
+  return trackedRanges.reduce(
+    (accumulator, trackedRange) => ({
+      firstActivityDate:
+        trackedRange?.firstActivityDate || accumulator.firstActivityDate,
+      lastActivityDate:
+        trackedRange?.lastActivityDate || accumulator.lastActivityDate,
+    }),
+    {
+      firstActivityDate: null,
+      lastActivityDate: null,
+    },
+  );
+}
+
+function getLastUpdatedAt(...queryTimestamps) {
+  const latestTimestamp = Math.max(...queryTimestamps.filter(Boolean), 0);
+  return latestTimestamp > 0 ? new Date(latestTimestamp).toISOString() : null;
+}
+
 function FullPageLoader() {
   return (
     <div className="shell shell-centered">
@@ -288,24 +319,51 @@ function SectionLoader({ copy, title }) {
 }
 
 export function DashboardPage() {
+  const queryClient = useQueryClient();
+  const dashboardTimezone = getDashboardTimezone();
   const [theme, setTheme] = useState(getInitialTheme);
   const [activeChannel, setActiveChannel] = useState("today");
   const [selectedDate, setSelectedDate] = useState(null);
   const [visibleMonth, setVisibleMonth] = useState(null);
-  const [creatingReminder, setCreatingReminder] = useState(false);
-  const [state, setState] = useState({
-    loading: true,
-    authenticated: true,
-    user: null,
-    botInstallUrl: null,
-    dashboard: createDashboardStateShell(),
-    reminders: [],
-    error: null,
-    historyLoading: false,
-    lastUpdatedAt: null,
-    lifetimeLoaded: false,
-    lifetimeLoading: false,
-    remindersLoading: false,
+
+  const sessionQuery = useQuery(getSessionQueryOptions());
+  const session = sessionQuery.data;
+  const authenticated = session?.authenticated === true;
+
+  const overviewQuery = useQuery({
+    ...getOverviewQueryOptions(dashboardTimezone),
+    enabled: authenticated,
+  });
+
+  const historyQuery = useQuery({
+    ...getHistoryQueryOptions(selectedDate, dashboardTimezone),
+    enabled:
+      authenticated &&
+      activeChannel === "history" &&
+      Boolean(selectedDate),
+  });
+
+  const lifetimeQuery = useQuery({
+    ...getLifetimeQueryOptions(dashboardTimezone),
+    enabled: authenticated && activeChannel === "lifetime",
+  });
+
+  const remindersQuery = useQuery({
+    ...getRemindersQueryOptions(),
+    enabled: authenticated,
+  });
+
+  const createReminderMutation = useMutation({
+    mutationFn: remindersApi.create,
+    onSuccess: ({ reminder }) => {
+      queryClient.setQueryData(
+        dashboardQueryKeys.reminders(),
+        (currentReminders) => [
+          reminder,
+          ...(Array.isArray(currentReminders) ? currentReminders : []),
+        ],
+      );
+    },
   });
 
   useEffect(() => {
@@ -314,324 +372,110 @@ export function DashboardPage() {
   }, [theme]);
 
   useEffect(() => {
-    if (state.loading) {
+    if (sessionQuery.isPending) {
       return;
     }
 
-    syncRouteForAuthState(state.authenticated);
-  }, [state.authenticated, state.loading]);
+    syncRouteForAuthState(authenticated);
+  }, [authenticated, sessionQuery.isPending]);
 
   useEffect(() => {
-    let active = true;
-    const bootstrapAbortController = new AbortController();
-
-    async function load() {
-      setState((previous) => ({
-        ...previous,
-        error: null,
-        loading: true
-      }));
-
-      try {
-        const [{ user, botInstallUrl }, overviewPayload] = await Promise.all([
-          authApi.getCurrentUser({
-            signal: bootstrapAbortController.signal,
-          }),
-          analyticsApi.getOverview(null, {
-            signal: bootstrapAbortController.signal,
-          }),
-        ]);
-        const overview = normalizeOverviewPayload(overviewPayload);
-        const dashboard = {
-          ...createDashboardStateShell(),
-          ...overview,
-          scopes: {
-            history: createEmptyScope(),
-            lifetime: createEmptyScope(),
-            today: overview.scopes.today
-          }
-        };
-
-        if (!active) {
-          return;
-        }
-
-        if (overview?.selectedDate) {
-          setSelectedDate(overview.selectedDate);
-          setVisibleMonth(
-            (currentVisibleMonth) =>
-              currentVisibleMonth || getMonthToken(overview.selectedDate),
-          );
-        }
-
-        setState((previous) => ({
-          ...previous,
-          loading: false,
-          authenticated: true,
-          user,
-          botInstallUrl: botInstallUrl || null,
-          dashboard,
-          error: null,
-          historyLoading: false,
-          lastUpdatedAt: new Date().toISOString(),
-        }));
-      } catch (error) {
-        if (!active) {
-          return;
-        }
-
-        if (error?.name === "AbortError") {
-          return;
-        }
-
-        if (error.status === 401) {
-          setState({
-            loading: false,
-            authenticated: false,
-            user: null,
-            botInstallUrl: null,
-            dashboard: createDashboardStateShell(),
-            reminders: [],
-            error: null,
-            historyLoading: false,
-            lastUpdatedAt: null,
-            lifetimeLoaded: false,
-            lifetimeLoading: false,
-            remindersLoading: false,
-          });
-          return;
-        }
-
-        setState((previous) => ({
-          ...previous,
-          loading: false,
-          historyLoading: false,
-          lifetimeLoading: false,
-          error: previous.lastUpdatedAt ? null : error.message,
-        }));
-      }
+    if (!overviewQuery.data?.selectedDate) {
+      return;
     }
 
-    void load();
+    setSelectedDate((currentSelectedDate) => currentSelectedDate || overviewQuery.data.selectedDate);
+    setVisibleMonth(
+      (currentVisibleMonth) =>
+        currentVisibleMonth || getMonthToken(overviewQuery.data.selectedDate),
+    );
+  }, [overviewQuery.data?.selectedDate]);
 
-    return () => {
-      active = false;
-      bootstrapAbortController.abort();
+  const dashboard = useMemo(() => {
+    const dashboardShell = createDashboardStateShell();
+    const overview = overviewQuery.data;
+    const history =
+      historyQuery.data?.selectedDate === selectedDate ? historyQuery.data : null;
+    const lifetime = lifetimeQuery.data;
+
+    return {
+      ...dashboardShell,
+      availableDates:
+        history?.availableDates?.length > 0
+          ? history.availableDates
+          : overview?.availableDates || dashboardShell.availableDates,
+      coverage: overview?.coverage || dashboardShell.coverage,
+      heatmap: lifetime?.heatmap || dashboardShell.heatmap,
+      scopes: {
+        history: history?.scopes.history || dashboardShell.scopes.history,
+        lifetime: lifetime?.scopes.lifetime || dashboardShell.scopes.lifetime,
+        today: overview?.scopes.today || dashboardShell.scopes.today,
+      },
+      selectedDate: selectedDate || overview?.selectedDate || dashboardShell.selectedDate,
+      timezone:
+        lifetime?.timezone ||
+        history?.timezone ||
+        overview?.timezone ||
+        dashboardShell.timezone,
+      todayDate:
+        lifetime?.todayDate ||
+        history?.todayDate ||
+        overview?.todayDate ||
+        dashboardShell.todayDate,
+      trackedRange: mergeTrackedRange(
+        overview?.trackedRange,
+        history?.trackedRange,
+        lifetime?.trackedRange,
+      ),
     };
-  }, []);
+  }, [
+    historyQuery.data,
+    lifetimeQuery.data,
+    overviewQuery.data,
+    selectedDate,
+  ]);
 
-  useEffect(() => {
-    if (
-      state.loading ||
-      !state.authenticated ||
-      !selectedDate ||
-      activeChannel !== "history" ||
-      state.dashboard.scopes.history.date === selectedDate
-    ) {
-      return undefined;
-    }
-
-    let active = true;
-    const historyAbortController = new AbortController();
-
-    async function loadHistory() {
-      setState((previous) => ({
-        ...previous,
-        historyLoading: true
-      }));
-
-      try {
-        const historyPayload = await analyticsApi.getHistory(selectedDate, {
-          signal: historyAbortController.signal
-        });
-        const history = normalizeHistoryPayload(historyPayload);
-
-        if (!active) {
-          return;
-        }
-
-        setState((previous) => ({
-          ...previous,
-          dashboard: {
-            ...previous.dashboard,
-            availableDates: history.availableDates.length
-              ? history.availableDates
-              : previous.dashboard.availableDates,
-            scopes: {
-              ...previous.dashboard.scopes,
-              history: history.scopes.history
-            },
-            selectedDate: history.selectedDate || previous.dashboard.selectedDate,
-            timezone: history.timezone || previous.dashboard.timezone,
-            todayDate: history.todayDate || previous.dashboard.todayDate,
-            trackedRange: {
-              ...previous.dashboard.trackedRange,
-              ...history.trackedRange
-            }
-          },
-          historyLoading: false,
-          lastUpdatedAt: new Date().toISOString()
-        }));
-      } catch (error) {
-        if (!active || error?.name === "AbortError") {
-          return;
-        }
-
-        setState((previous) => ({
-          ...previous,
-          historyLoading: false
-        }));
-      }
-    }
-
-    void loadHistory();
-
-    return () => {
-      active = false;
-      historyAbortController.abort();
-    };
-  }, [activeChannel, selectedDate, state.authenticated, state.dashboard.scopes.history.date, state.loading]);
-
-  useEffect(() => {
-    if (
-      state.loading ||
-      !state.authenticated ||
-      activeChannel !== "lifetime" ||
-      state.lifetimeLoaded
-    ) {
-      return undefined;
-    }
-
-    let active = true;
-    const lifetimeAbortController = new AbortController();
-
-    async function loadLifetime() {
-      setState((previous) => ({
-        ...previous,
-        lifetimeLoading: true
-      }));
-
-      try {
-        const lifetimePayload = await analyticsApi.getLifetime({
-          signal: lifetimeAbortController.signal
-        });
-        const lifetime = normalizeLifetimePayload(lifetimePayload);
-
-        if (!active) {
-          return;
-        }
-
-        setState((previous) => ({
-          ...previous,
-          dashboard: {
-            ...previous.dashboard,
-            heatmap: lifetime.heatmap,
-            scopes: {
-              ...previous.dashboard.scopes,
-              lifetime: lifetime.scopes.lifetime
-            },
-            timezone: lifetime.timezone || previous.dashboard.timezone,
-            todayDate: lifetime.todayDate || previous.dashboard.todayDate,
-            trackedRange: {
-              ...previous.dashboard.trackedRange,
-              ...lifetime.trackedRange
-            }
-          },
-          lifetimeLoaded: true,
-          lifetimeLoading: false,
-          lastUpdatedAt: new Date().toISOString()
-        }));
-      } catch (error) {
-        if (!active || error?.name === "AbortError") {
-          return;
-        }
-
-        setState((previous) => ({
-          ...previous,
-          lifetimeLoading: false
-        }));
-      }
-    }
-
-    void loadLifetime();
-
-    return () => {
-      active = false;
-      lifetimeAbortController.abort();
-    };
-  }, [activeChannel, state.authenticated, state.lifetimeLoaded, state.loading]);
-
-  useEffect(() => {
-    if (state.loading || !state.authenticated) {
-      return undefined;
-    }
-
-    let active = true;
-    const remindersAbortController = new AbortController();
-
-    async function loadReminders() {
-      setState((previous) => ({
-        ...previous,
-        remindersLoading: true
-      }));
-
-      try {
-        const remindersResponse = await remindersApi.list({
-          signal: remindersAbortController.signal,
-        });
-
-        if (!active) {
-          return;
-        }
-
-        setState((previous) => ({
-          ...previous,
-          reminders: Array.isArray(remindersResponse?.reminders)
-            ? remindersResponse.reminders
-            : [],
-          remindersLoading: false
-        }));
-      } catch (error) {
-        if (!active || error?.name === "AbortError") {
-          return;
-        }
-
-        setState((previous) => ({
-          ...previous,
-          remindersLoading: false
-        }));
-      }
-    }
-
-    void loadReminders();
-
-    return () => {
-      active = false;
-      remindersAbortController.abort();
-    };
-  }, [state.loading, state.authenticated]);
-
-  const dashboard = state.dashboard;
+  const loading =
+    sessionQuery.isPending || (authenticated && overviewQuery.isPending);
+  const error =
+    sessionQuery.error ||
+    (authenticated ? overviewQuery.error : null);
+  const reminders = remindersQuery.data || [];
+  const remindersLoading = authenticated && remindersQuery.isPending;
+  const historyLoading =
+    authenticated &&
+    activeChannel === "history" &&
+    Boolean(selectedDate) &&
+    historyQuery.isPending;
+  const lifetimeLoading =
+    authenticated &&
+    activeChannel === "lifetime" &&
+    lifetimeQuery.isPending;
+  const lifetimeLoaded = lifetimeQuery.isSuccess;
+  const lastUpdatedAt = getLastUpdatedAt(
+    overviewQuery.dataUpdatedAt,
+    historyQuery.dataUpdatedAt,
+    lifetimeQuery.dataUpdatedAt,
+    remindersQuery.dataUpdatedAt,
+  );
 
   async function handleCreateReminder(payload) {
-    setCreatingReminder(true);
-
-    try {
-      const { reminder } = await remindersApi.create(payload);
-      setState((previous) => ({
-        ...previous,
-        reminders: [reminder, ...previous.reminders],
-      }));
-    } finally {
-      setCreatingReminder(false);
-    }
+    await createReminderMutation.mutateAsync(payload);
   }
 
-  if (state.loading) {
+  if (loading) {
     return <FullPageLoader />;
   }
 
-  if (!state.authenticated) {
+  if (error) {
+    return (
+      <div className="shell">
+        <div className="hero-card">Failed to load dashboard: {error.message}</div>
+      </div>
+    );
+  }
+
+  if (!authenticated) {
     return (
       <div className="shell">
         <nav className="app-navbar">
@@ -736,14 +580,6 @@ export function DashboardPage() {
     );
   }
 
-  if (state.error) {
-    return (
-      <div className="shell">
-        <div className="hero-card">Failed to load dashboard: {state.error}</div>
-      </div>
-    );
-  }
-
   const todayScope = dashboard.scopes.today;
   const historyScope = dashboard.scopes.history;
   const lifetimeScope = dashboard.scopes.lifetime;
@@ -821,7 +657,7 @@ export function DashboardPage() {
           </section>
         </section>
         <section className="dashboard-grid analytics-primary-grid">
-          {state.historyLoading || !historyScopeReady ? (
+          {historyLoading || !historyScopeReady ? (
             <>
               <SectionLoader
                 copy="Rebuilding the hourly message and voice breakdown for the selected date."
@@ -847,7 +683,7 @@ export function DashboardPage() {
             </>
           )}
         </section>
-        {state.historyLoading || !historyScopeReady ? (
+        {historyLoading || !historyScopeReady ? (
           <SectionLoader
             copy="Loading the tracked voice sessions and message history for the selected date."
             title="Loading activity log"
@@ -863,7 +699,7 @@ export function DashboardPage() {
   }
 
   function renderLifetimeChannel() {
-    if (state.lifetimeLoading || !state.lifetimeLoaded) {
+    if (lifetimeLoading || !lifetimeLoaded) {
       return (
         <>
           <ChannelIntro
@@ -917,10 +753,10 @@ export function DashboardPage() {
           description="Create reminders here and Disclytics will DM them back to you when the schedule is reached."
         />
         <ReminderPanel
-          creatingReminder={creatingReminder}
-          loadingReminders={state.remindersLoading}
+          creatingReminder={createReminderMutation.isPending}
+          loadingReminders={remindersLoading}
           onCreateReminder={handleCreateReminder}
-          reminders={state.reminders}
+          reminders={reminders}
         />
       </>
     );
@@ -946,12 +782,12 @@ export function DashboardPage() {
     <div className="discord-app">
       <nav className="app-navbar">
         <div className="brand-lockup">
-          <UserBrandGlyph user={state.user} />
+          <UserBrandGlyph user={session?.user} />
           <div>
             <p className="eyebrow">Disclytics</p>
             <h1 className="brand-title">
-              {state.user?.global_name ||
-                state.user?.username ||
+              {session?.user?.global_name ||
+                session?.user?.username ||
                 "Disclytics User"}
             </h1>
           </div>
@@ -977,11 +813,11 @@ export function DashboardPage() {
               <FiMoon aria-hidden="true" />
             )}
           </button>
-          {state.botInstallUrl ? (
+          {session?.botInstallUrl ? (
             <a
               aria-label="Invite bot"
               className="secondary-button icon-button"
-              href={state.botInstallUrl}
+              href={session.botInstallUrl}
               rel="noreferrer"
               target="_blank"
             >
@@ -993,6 +829,7 @@ export function DashboardPage() {
             className="secondary-button icon-button"
             onClick={() =>
               authApi.logout().then(() => {
+                queryClient.clear();
                 syncRouteForAuthState(false);
                 window.location.reload();
               })
@@ -1019,7 +856,7 @@ export function DashboardPage() {
               </p>
             </div>
             <p className="toolbar-caption">
-              {formatRefreshTime(state.lastUpdatedAt)}
+              {formatRefreshTime(lastUpdatedAt)}
             </p>
           </header>
 

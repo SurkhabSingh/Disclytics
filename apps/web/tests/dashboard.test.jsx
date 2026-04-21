@@ -1,6 +1,8 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createAppQueryClient } from "../src/api/queryClient";
 import { DashboardPage } from "../src/pages/DashboardPage";
 
 vi.mock("../src/api/client", () => ({
@@ -16,6 +18,7 @@ vi.mock("../src/api/client", () => ({
     getLoginUrl: () => "/login",
     logout: () => Promise.resolve()
   },
+  getBrowserTimezone: () => "UTC",
   remindersApi: {
     create: vi.fn(),
     list: vi.fn()
@@ -23,6 +26,16 @@ vi.mock("../src/api/client", () => ({
 }));
 
 const { analyticsApi, authApi, remindersApi } = await import("../src/api/client");
+
+function renderDashboard() {
+  const queryClient = createAppQueryClient();
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <DashboardPage />
+    </QueryClientProvider>,
+  );
+}
 
 function createDashboardFixture() {
   return {
@@ -113,7 +126,7 @@ describe("DashboardPage", () => {
       }
     });
 
-    render(<DashboardPage />);
+    renderDashboard();
 
     expect(await screen.findByText("Disclytics Tester")).toBeInTheDocument();
     expect(screen.getAllByText("#today's activity")).toHaveLength(2);
@@ -126,7 +139,7 @@ describe("DashboardPage", () => {
     error.status = 401;
     authApi.getCurrentUser.mockRejectedValue(error);
 
-    render(<DashboardPage />);
+    renderDashboard();
 
     expect(await screen.findByText("Discord activity, made honest.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Add to Discord" })).toBeInTheDocument();

@@ -3,7 +3,7 @@ const API_REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_API_REQUEST_TIMEOUT_M
 const DEFAULT_SAFE_GET_RETRIES = 1;
 const RETRYABLE_METHODS = new Set(["GET", "HEAD"]);
 
-function getBrowserTimezone() {
+export function getBrowserTimezone() {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   } catch {
