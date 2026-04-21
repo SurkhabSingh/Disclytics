@@ -5,7 +5,10 @@ import { DashboardPage } from "../src/pages/DashboardPage";
 
 vi.mock("../src/api/client", () => ({
   analyticsApi: {
-    getDashboard: vi.fn()
+    getDashboard: vi.fn(),
+    getHistory: vi.fn(),
+    getLifetime: vi.fn(),
+    getOverview: vi.fn()
   },
   authApi: {
     getInstallUrl: () => "/install",
@@ -82,7 +85,22 @@ describe("DashboardPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     remindersApi.list.mockResolvedValue({ reminders: [] });
-    analyticsApi.getDashboard.mockResolvedValue(createDashboardFixture());
+    analyticsApi.getOverview.mockResolvedValue(createDashboardFixture());
+    analyticsApi.getHistory.mockResolvedValue({
+      availableDates: ["2026-04-01"],
+      scopes: { history: createDashboardFixture().scopes.history },
+      selectedDate: "2026-04-01",
+      timezone: "UTC",
+      todayDate: "2026-04-01",
+      trackedRange: createDashboardFixture().trackedRange
+    });
+    analyticsApi.getLifetime.mockResolvedValue({
+      heatmap: [],
+      scopes: { lifetime: createDashboardFixture().scopes.lifetime },
+      timezone: "UTC",
+      todayDate: "2026-04-01",
+      trackedRange: createDashboardFixture().trackedRange
+    });
   });
 
   it("renders the authenticated dashboard shell", async () => {

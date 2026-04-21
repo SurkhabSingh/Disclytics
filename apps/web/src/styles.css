@@ -130,6 +130,12 @@ button {
   padding: 32px 20px 56px;
 }
 
+.shell-centered {
+  min-height: 100vh;
+  display: grid;
+  align-items: center;
+}
+
 .discord-app {
   height: 100vh;
   padding: 16px;
@@ -391,6 +397,59 @@ button {
   max-width: 920px;
 }
 
+.loading-shell-card {
+  align-items: center;
+}
+
+.loading-shell-copy {
+  display: grid;
+  gap: 10px;
+  max-width: 480px;
+}
+
+.loading-shell-copy h1 {
+  margin: 0;
+  font-size: clamp(2rem, 3vw, 3rem);
+  line-height: 1.02;
+}
+
+.loading-shell-copy p:last-child {
+  margin-top: 0;
+}
+
+.loading-shell-preview {
+  min-width: 320px;
+  max-width: 360px;
+  display: grid;
+  gap: 14px;
+  width: 100%;
+}
+
+.loading-shimmer-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.loading-shimmer-block {
+  min-height: 88px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--panel-strong) 86%, var(--brand) 14%) 0%,
+      color-mix(in srgb, var(--panel-strong) 72%, var(--brand) 28%) 50%,
+      color-mix(in srgb, var(--panel-strong) 86%, var(--brand) 14%) 100%
+    );
+  background-size: 220% 100%;
+  animation: disclytics-shimmer 1.4s linear infinite;
+}
+
+.loading-shimmer-block-large {
+  min-height: 160px;
+}
+
 .hero-copy {
   flex: 1 1 auto;
   min-width: 0;
@@ -630,6 +689,24 @@ button {
   justify-content: center;
   min-height: 180px;
   color: var(--muted);
+  text-align: center;
+}
+
+.loading-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.loading-copy {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.reminder-loading-state {
+  min-height: 120px;
 }
 
 .panel-header {
@@ -1300,5 +1377,20 @@ button {
 
   .reminder-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .loading-shell-preview {
+    min-width: 0;
+    max-width: none;
+  }
+}
+
+@keyframes disclytics-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -20% 0;
   }
 }

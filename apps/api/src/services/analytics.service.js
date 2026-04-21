@@ -1,6 +1,7 @@
 const { DateTime, IANAZone } = require("luxon");
 const { pool } = require("../db/pool");
 const {
+  getAvailableActivityDates,
   getCoverage,
   getGuildScopedSummary,
   getHeatmap,
@@ -200,170 +201,225 @@ function mapTrendRows(rows) {
   }));
 }
 
-async function getDashboardAnalytics(userId, requestedDate, requestedTimezone) {
+function mapHourlyBreakdown(rows) {
+  return rows.map((row) => ({
+    hourOfDay: Number(row.hour_of_day),
+    totalMessages: Number(row.total_messages || 0),
+    totalVoiceSeconds: Number(row.total_voice_seconds || 0)
+  }));
+}
+
+function mapHeatmap(rows) {
+  return rows.map((row) => ({
+    dayOfWeek: Number(row.day_of_week),
+    hourOfDay: Number(row.hour_of_day),
+    eventCount: Number(row.event_count)
+  }));
+}
+
+async function getAnalyticsContext(client, userId, requestedDate, requestedTimezone) {
+  const user = await getUserById(client, userId);
+  const analyticsTimezone = await resolveDatabaseTimezone(client, requestedTimezone, user?.timezone);
+
+  if (user && user.timezone !== analyticsTimezone) {
+    await updateUserTimezone(client, userId, analyticsTimezone);
+  }
+
+  const now = DateTime.now().setZone(analyticsTimezone);
+  const today = now.toISODate();
+  const trackedBounds = await getTrackedDateBounds(client, userId, analyticsTimezone);
+  const trackedStartDate = isoDate(trackedBounds.first_activity_date);
+  const lastActivityDate = isoDate(trackedBounds.last_activity_date);
+  const availableDateRows = await getAvailableActivityDates(client, userId, analyticsTimezone);
+  const availableDates = availableDateRows
+    .map((row) => isoDate(row.activity_date))
+    .filter(Boolean);
+  const selectedDate = pickSelectedDate(requestedDate, availableDates, lastActivityDate || today);
+
+  return {
+    analyticsTimezone,
+    availableDates,
+    lastActivityDate,
+    now,
+    selectedDate,
+    today,
+    trackedRange: {
+      firstActivityDate: trackedStartDate,
+      lastActivityDate
+    }
+  };
+}
+
+async function getTodayScope(client, userId, dateValue, timezone) {
+  const dayWindow = getDayWindow(dateValue, timezone);
+  const [summary, chatChannels, voiceChannels, hourlyBreakdownRows, recentMessages, recentVoiceSessions, voiceSessionsForChart] = await Promise.all([
+    getScopedSummary(client, userId, dayWindow.startAt, dayWindow.endAt),
+    getTopChatChannels(client, userId, dayWindow.startAt, dayWindow.endAt, 8),
+    getTopVoiceChannels(client, userId, dayWindow.startAt, dayWindow.endAt, 8),
+    getHourlyBreakdown(client, userId, dateValue, timezone),
+    getRecentMessages(client, userId, {
+      endAt: dayWindow.endAt,
+      limit: 20,
+      startAt: dayWindow.startAt
+    }),
+    getRecentVoiceSessions(client, userId, {
+      endAt: dayWindow.endAt,
+      limit: 20,
+      startAt: dayWindow.startAt
+    }),
+    getRecentVoiceSessions(client, userId, {
+      endAt: dayWindow.endAt,
+      limit: 250,
+      startAt: dayWindow.startAt
+    })
+  ]);
+
+  return {
+    date: dateValue,
+    summary: mapSummary(summary),
+    hourlyBreakdown: mapHourlyBreakdown(hourlyBreakdownRows),
+    leaderboards: {
+      chatChannels: mapChatLeaderboard(chatChannels),
+      voiceChannels: mapVoiceLeaderboard(voiceChannels)
+    },
+    recentMessages: mapMessages(recentMessages),
+    recentVoiceSessions: mapVoiceSessions(recentVoiceSessions),
+    voiceSessionsForChart: mapVoiceSessions(voiceSessionsForChart)
+  };
+}
+
+async function getHistoryScope(client, userId, selectedDate, timezone) {
+  return getTodayScope(client, userId, selectedDate, timezone);
+}
+
+async function getLifetimeScope(client, userId, trackedStartDate, today, timezone, nowUtcIso) {
+  const lifetimeStartAt = getDayWindow(trackedStartDate || today, timezone).startAt;
+  const lifetimeEndAt = nowUtcIso;
+  const [summary, trendRows, chatChannels, voiceChannels, heatmapRows, recentMessages, recentVoiceSessions] = await Promise.all([
+    getScopedSummary(client, userId, lifetimeStartAt, lifetimeEndAt),
+    getLifetimeTrend(client, userId, trackedStartDate, today, timezone),
+    getTopChatChannels(client, userId, lifetimeStartAt, lifetimeEndAt, 8),
+    getTopVoiceChannels(client, userId, lifetimeStartAt, lifetimeEndAt, 8),
+    getHeatmap(client, userId, lifetimeStartAt, lifetimeEndAt, timezone),
+    getRecentMessages(client, userId, { limit: 20 }),
+    getRecentVoiceSessions(client, userId, { limit: 20 })
+  ]);
+
+  return {
+    heatmap: mapHeatmap(heatmapRows),
+    scope: {
+      summary: mapSummary(summary),
+      trend: mapTrendRows(trendRows),
+      leaderboards: {
+        chatChannels: mapChatLeaderboard(chatChannels),
+        voiceChannels: mapVoiceLeaderboard(voiceChannels)
+      },
+      recentMessages: mapMessages(recentMessages),
+      recentVoiceSessions: mapVoiceSessions(recentVoiceSessions)
+    }
+  };
+}
+
+async function getDashboardOverview(userId, requestedDate, requestedTimezone) {
   const client = await pool.connect();
 
   try {
-    const user = await getUserById(client, userId);
-    const analyticsTimezone = await resolveDatabaseTimezone(client, requestedTimezone, user?.timezone);
-
-    if (user && user.timezone !== analyticsTimezone) {
-      await updateUserTimezone(client, userId, analyticsTimezone);
-    }
-
-    const now = DateTime.now().setZone(analyticsTimezone);
-    const today = now.toISODate();
+    const context = await getAnalyticsContext(client, userId, requestedDate, requestedTimezone);
     const coverage = await getCoverage(client, userId);
-    const trackedBounds = await getTrackedDateBounds(client, userId, analyticsTimezone);
-
-    const trackedStartDate = isoDate(trackedBounds.first_activity_date);
-    const lastActivityDate = isoDate(trackedBounds.last_activity_date);
-    const lifetimeTrendRows = await getLifetimeTrend(
-      client,
-      userId,
-      trackedStartDate,
-      today,
-      analyticsTimezone
-    );
-    const lifetimeTrend = mapTrendRows(lifetimeTrendRows);
-    const availableDates = lifetimeTrend
-      .filter((row) => row.totalMessages > 0 || row.totalVoiceSeconds > 0)
-      .map((row) => row.date)
-      .reverse();
-    const selectedDate = pickSelectedDate(requestedDate, availableDates, lastActivityDate || today);
-    const lifetimeWindow = getDayWindow(trackedStartDate || today, analyticsTimezone);
-    const todayWindow = getDayWindow(today, analyticsTimezone);
-    const selectedDayWindow = getDayWindow(selectedDate, analyticsTimezone);
-    const lifetimeStartAt = lifetimeWindow.startAt;
-    const lifetimeEndAt = now.toUTC().toISO();
-    const todayStartAt = todayWindow.startAt;
-    const todayEndAt = todayWindow.endAt;
-    const selectedDayStartAt = selectedDayWindow.startAt;
-    const selectedDayEndAt = selectedDayWindow.endAt;
-    const selectedDateIsToday = selectedDate === today;
-
-    const lifetimeSummary = await getScopedSummary(client, userId, lifetimeStartAt, lifetimeEndAt);
-    const todaySummary = await getScopedSummary(client, userId, todayStartAt, todayEndAt);
-    const lifetimeChatChannels = await getTopChatChannels(client, userId, lifetimeStartAt, lifetimeEndAt, 8);
-    const todayChatChannels = await getTopChatChannels(client, userId, todayStartAt, todayEndAt, 8);
-    const lifetimeVoiceChannels = await getTopVoiceChannels(client, userId, lifetimeStartAt, lifetimeEndAt, 8);
-    const todayVoiceChannels = await getTopVoiceChannels(client, userId, todayStartAt, todayEndAt, 8);
-    const heatmapRows = await getHeatmap(client, userId, lifetimeStartAt, lifetimeEndAt, analyticsTimezone);
-    const todayHourlyBreakdownRows = await getHourlyBreakdown(client, userId, today, analyticsTimezone);
-    const lifetimeRecentMessages = await getRecentMessages(client, userId, { limit: 20 });
-    const todayRecentMessages = await getRecentMessages(client, userId, {
-      endAt: todayEndAt,
-      limit: 20,
-      startAt: todayStartAt
-    });
-    const lifetimeRecentVoiceSessions = await getRecentVoiceSessions(client, userId, { limit: 20 });
-    const todayRecentVoiceSessions = await getRecentVoiceSessions(client, userId, {
-      endAt: todayEndAt,
-      limit: 20,
-      startAt: todayStartAt
-    });
-    const todayVoiceSessionsForChart = await getRecentVoiceSessions(client, userId, {
-      endAt: todayEndAt,
-      limit: 250,
-      startAt: todayStartAt
-    });
-    const historySummary = selectedDateIsToday
-      ? todaySummary
-      : await getScopedSummary(client, userId, selectedDayStartAt, selectedDayEndAt);
-    const historyChatChannels = selectedDateIsToday
-      ? todayChatChannels
-      : await getTopChatChannels(client, userId, selectedDayStartAt, selectedDayEndAt, 8);
-    const historyVoiceChannels = selectedDateIsToday
-      ? todayVoiceChannels
-      : await getTopVoiceChannels(client, userId, selectedDayStartAt, selectedDayEndAt, 8);
-    const historyHourlyBreakdownRows = selectedDateIsToday
-      ? todayHourlyBreakdownRows
-      : await getHourlyBreakdown(client, userId, selectedDate, analyticsTimezone);
-    const selectedDayRecentMessages = selectedDateIsToday
-      ? todayRecentMessages
-      : await getRecentMessages(client, userId, {
-        endAt: selectedDayEndAt,
-        limit: 20,
-        startAt: selectedDayStartAt
-      });
-    const selectedDayRecentVoiceSessions = selectedDateIsToday
-      ? todayRecentVoiceSessions
-      : await getRecentVoiceSessions(client, userId, {
-        endAt: selectedDayEndAt,
-        limit: 20,
-        startAt: selectedDayStartAt
-      });
-    const selectedDayVoiceSessionsForChart = selectedDateIsToday
-      ? todayVoiceSessionsForChart
-      : await getRecentVoiceSessions(client, userId, {
-        endAt: selectedDayEndAt,
-        limit: 250,
-        startAt: selectedDayStartAt
-      });
+    const todayScope = await getTodayScope(client, userId, context.today, context.analyticsTimezone);
 
     return {
+      availableDates: context.availableDates,
       coverage,
-      trackedRange: {
-        firstActivityDate: trackedStartDate,
-        lastActivityDate
-      },
-      timezone: analyticsTimezone,
-      selectedDate,
-      todayDate: today,
-      availableDates,
+      selectedDate: context.selectedDate,
+      timezone: context.analyticsTimezone,
+      todayDate: context.today,
+      trackedRange: context.trackedRange,
       scopes: {
-        today: {
-          date: today,
-          summary: mapSummary(todaySummary),
-          hourlyBreakdown: todayHourlyBreakdownRows.map((row) => ({
-            hourOfDay: Number(row.hour_of_day),
-            totalMessages: Number(row.total_messages || 0),
-            totalVoiceSeconds: Number(row.total_voice_seconds || 0)
-          })),
-          leaderboards: {
-            chatChannels: mapChatLeaderboard(todayChatChannels),
-            voiceChannels: mapVoiceLeaderboard(todayVoiceChannels)
-          },
-          recentMessages: mapMessages(todayRecentMessages),
-          recentVoiceSessions: mapVoiceSessions(todayRecentVoiceSessions),
-          voiceSessionsForChart: mapVoiceSessions(todayVoiceSessionsForChart)
-        },
-        lifetime: {
-          summary: mapSummary(lifetimeSummary),
-          trend: lifetimeTrend,
-          leaderboards: {
-            chatChannels: mapChatLeaderboard(lifetimeChatChannels),
-            voiceChannels: mapVoiceLeaderboard(lifetimeVoiceChannels)
-          },
-          recentMessages: mapMessages(lifetimeRecentMessages),
-          recentVoiceSessions: mapVoiceSessions(lifetimeRecentVoiceSessions)
-        },
-        history: {
-          date: selectedDate,
-          summary: mapSummary(historySummary),
-          hourlyBreakdown: historyHourlyBreakdownRows.map((row) => ({
-            hourOfDay: Number(row.hour_of_day),
-            totalMessages: Number(row.total_messages || 0),
-            totalVoiceSeconds: Number(row.total_voice_seconds || 0)
-          })),
-          leaderboards: {
-            chatChannels: mapChatLeaderboard(historyChatChannels),
-            voiceChannels: mapVoiceLeaderboard(historyVoiceChannels)
-          },
-          recentMessages: mapMessages(selectedDayRecentMessages),
-          recentVoiceSessions: mapVoiceSessions(selectedDayRecentVoiceSessions),
-          voiceSessionsForChart: mapVoiceSessions(selectedDayVoiceSessionsForChart)
-        }
-      },
-      heatmap: heatmapRows.map((row) => ({
-        dayOfWeek: Number(row.day_of_week),
-        hourOfDay: Number(row.hour_of_day),
-        eventCount: Number(row.event_count)
-      }))
+        today: todayScope
+      }
     };
   } finally {
     client.release();
   }
+}
+
+async function getHistoryAnalytics(userId, requestedDate, requestedTimezone) {
+  const client = await pool.connect();
+
+  try {
+    const context = await getAnalyticsContext(client, userId, requestedDate, requestedTimezone);
+    const historyScope = await getHistoryScope(
+      client,
+      userId,
+      context.selectedDate,
+      context.analyticsTimezone
+    );
+
+    return {
+      availableDates: context.availableDates,
+      selectedDate: context.selectedDate,
+      timezone: context.analyticsTimezone,
+      todayDate: context.today,
+      trackedRange: context.trackedRange,
+      scopes: {
+        history: historyScope
+      }
+    };
+  } finally {
+    client.release();
+  }
+}
+
+async function getLifetimeAnalytics(userId, requestedTimezone) {
+  const client = await pool.connect();
+
+  try {
+    const context = await getAnalyticsContext(client, userId, null, requestedTimezone);
+    const lifetime = await getLifetimeScope(
+      client,
+      userId,
+      context.trackedRange.firstActivityDate,
+      context.today,
+      context.analyticsTimezone,
+      context.now.toUTC().toISO()
+    );
+
+    return {
+      heatmap: lifetime.heatmap,
+      timezone: context.analyticsTimezone,
+      todayDate: context.today,
+      trackedRange: context.trackedRange,
+      scopes: {
+        lifetime: lifetime.scope
+      }
+    };
+  } finally {
+    client.release();
+  }
+}
+
+async function getDashboardAnalytics(userId, requestedDate, requestedTimezone) {
+  const [overview, history, lifetime] = await Promise.all([
+    getDashboardOverview(userId, requestedDate, requestedTimezone),
+    getHistoryAnalytics(userId, requestedDate, requestedTimezone),
+    getLifetimeAnalytics(userId, requestedTimezone)
+  ]);
+
+  return {
+    availableDates: overview.availableDates,
+    coverage: overview.coverage,
+    heatmap: lifetime.heatmap,
+    scopes: {
+      history: history.scopes.history,
+      lifetime: lifetime.scopes.lifetime,
+      today: overview.scopes.today
+    },
+    selectedDate: history.selectedDate,
+    timezone: overview.timezone,
+    todayDate: overview.todayDate,
+    trackedRange: overview.trackedRange
+  };
 }
 
 function minTimestamp(...values) {
@@ -387,7 +443,9 @@ function maxTimestamp(...values) {
 }
 
 module.exports = {
+  getDashboardOverview,
   getDashboardAnalytics,
+  getHistoryAnalytics,
   async getGuildStatsSummary(userId, guildId, period) {
     const client = await pool.connect();
 
@@ -410,5 +468,6 @@ module.exports = {
     } finally {
       client.release();
     }
-  }
+  },
+  getLifetimeAnalytics
 };

@@ -22,7 +22,12 @@ function getDefaultTimezone() {
   }
 }
 
-export function ReminderPanel({ reminders, onCreateReminder, creatingReminder }) {
+export function ReminderPanel({
+  reminders,
+  onCreateReminder,
+  creatingReminder,
+  loadingReminders = false
+}) {
   const [form, setForm] = useState({
     title: "",
     message: "",
@@ -247,7 +252,14 @@ export function ReminderPanel({ reminders, onCreateReminder, creatingReminder })
       </div>
 
       <div className="reminder-list">
-        {visibleReminders.length ? (
+        {loadingReminders ? (
+          <div className="panel-loading-state reminder-loading-state">
+            <div>
+              <p className="loading-title">Loading reminders</p>
+              <p className="loading-copy">Fetching your latest reminder list.</p>
+            </div>
+          </div>
+        ) : visibleReminders.length ? (
           visibleReminders.map((reminder) => {
             const status = getStatusLabel(reminder);
 

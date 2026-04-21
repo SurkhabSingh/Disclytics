@@ -22,7 +22,12 @@ import { ReminderPanel } from "../components/ReminderPanel";
 import { ActivityHeatmap } from "../components/charts/ActivityHeatmap";
 import { EngagementTrendChart } from "../components/charts/EngagementTrendChart";
 import { HourlyUsageChart } from "../components/charts/HourlyUsageChart";
-import { normalizeDashboardPayload } from "../features/analytics/dashboardModel";
+import {
+  createEmptyScope,
+  normalizeHistoryPayload,
+  normalizeLifetimePayload,
+  normalizeOverviewPayload,
+} from "../features/analytics/dashboardModel";
 
 const THEME_STORAGE_KEY = "disclytics-theme";
 
@@ -223,6 +228,65 @@ function ScopeMetrics({ scope, detail }) {
   );
 }
 
+function createDashboardStateShell() {
+  return {
+    availableDates: [],
+    coverage: {
+      accessibleGuilds: 0,
+      trackedGuilds: 0,
+      percent: 0,
+    },
+    heatmap: [],
+    scopes: {
+      history: createEmptyScope(),
+      lifetime: createEmptyScope(),
+      today: createEmptyScope(),
+    },
+    selectedDate: null,
+    timezone: null,
+    todayDate: null,
+    trackedRange: {
+      firstActivityDate: null,
+      lastActivityDate: null,
+    },
+  };
+}
+
+function FullPageLoader() {
+  return (
+    <div className="shell shell-centered">
+      <section className="hero-card state-card loading-shell-card">
+        <div className="loading-shell-copy">
+          <p className="eyebrow">Disclytics</p>
+          <h1>Loading your dashboard</h1>
+          <p>
+            Pulling your latest analytics, reminders, and channel activity.
+          </p>
+        </div>
+        <div className="loading-shell-preview" aria-hidden="true">
+          <div className="loading-shimmer-block loading-shimmer-block-large" />
+          <div className="loading-shimmer-row">
+            <div className="loading-shimmer-block" />
+            <div className="loading-shimmer-block" />
+            <div className="loading-shimmer-block" />
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SectionLoader({ copy, title }) {
+  return (
+    <section className="panel panel-loading-state">
+      <div>
+        <p className="loading-title">{title}</p>
+        <p className="loading-copy">{copy}</p>
+      </div>
+    </section>
+  );
+}
+
 export function DashboardPage() {
   const [theme, setTheme] = useState(getInitialTheme);
   const [activeChannel, setActiveChannel] = useState("today");
@@ -234,10 +298,14 @@ export function DashboardPage() {
     authenticated: true,
     user: null,
     botInstallUrl: null,
-    dashboard: null,
+    dashboard: createDashboardStateShell(),
     reminders: [],
     error: null,
+    historyLoading: false,
     lastUpdatedAt: null,
+    lifetimeLoaded: false,
+    lifetimeLoading: false,
+    remindersLoading: false,
   });
 
   useEffect(() => {
@@ -255,38 +323,44 @@ export function DashboardPage() {
 
   useEffect(() => {
     let active = true;
-    let dashboardAbortController = null;
+    const bootstrapAbortController = new AbortController();
 
     async function load() {
-      dashboardAbortController?.abort();
-      dashboardAbortController = new AbortController();
+      setState((previous) => ({
+        ...previous,
+        error: null,
+        loading: true
+      }));
 
       try {
-        const [{ user, botInstallUrl }, dashboardPayload] = await Promise.all([
+        const [{ user, botInstallUrl }, overviewPayload] = await Promise.all([
           authApi.getCurrentUser({
-            signal: dashboardAbortController.signal,
+            signal: bootstrapAbortController.signal,
           }),
-          analyticsApi.getDashboard(selectedDate, {
-            signal: dashboardAbortController.signal,
+          analyticsApi.getOverview(null, {
+            signal: bootstrapAbortController.signal,
           }),
         ]);
-        const dashboard = normalizeDashboardPayload(dashboardPayload);
+        const overview = normalizeOverviewPayload(overviewPayload);
+        const dashboard = {
+          ...createDashboardStateShell(),
+          ...overview,
+          scopes: {
+            history: createEmptyScope(),
+            lifetime: createEmptyScope(),
+            today: overview.scopes.today
+          }
+        };
 
         if (!active) {
           return;
         }
 
-        if (
-          dashboard?.selectedDate &&
-          dashboard.selectedDate !== selectedDate
-        ) {
-          setSelectedDate(dashboard.selectedDate);
-        }
-
-        if (dashboard?.selectedDate) {
+        if (overview?.selectedDate) {
+          setSelectedDate(overview.selectedDate);
           setVisibleMonth(
             (currentVisibleMonth) =>
-              currentVisibleMonth || getMonthToken(dashboard.selectedDate),
+              currentVisibleMonth || getMonthToken(overview.selectedDate),
           );
         }
 
@@ -298,6 +372,7 @@ export function DashboardPage() {
           botInstallUrl: botInstallUrl || null,
           dashboard,
           error: null,
+          historyLoading: false,
           lastUpdatedAt: new Date().toISOString(),
         }));
       } catch (error) {
@@ -315,10 +390,14 @@ export function DashboardPage() {
             authenticated: false,
             user: null,
             botInstallUrl: null,
-            dashboard: null,
+            dashboard: createDashboardStateShell(),
             reminders: [],
             error: null,
+            historyLoading: false,
             lastUpdatedAt: null,
+            lifetimeLoaded: false,
+            lifetimeLoading: false,
+            remindersLoading: false,
           });
           return;
         }
@@ -326,7 +405,9 @@ export function DashboardPage() {
         setState((previous) => ({
           ...previous,
           loading: false,
-          error: previous.dashboard ? null : error.message,
+          historyLoading: false,
+          lifetimeLoading: false,
+          error: previous.lastUpdatedAt ? null : error.message,
         }));
       }
     }
@@ -335,9 +416,150 @@ export function DashboardPage() {
 
     return () => {
       active = false;
-      dashboardAbortController?.abort();
+      bootstrapAbortController.abort();
     };
-  }, [selectedDate]);
+  }, []);
+
+  useEffect(() => {
+    if (
+      state.loading ||
+      !state.authenticated ||
+      !selectedDate ||
+      activeChannel !== "history" ||
+      state.dashboard.scopes.history.date === selectedDate
+    ) {
+      return undefined;
+    }
+
+    let active = true;
+    const historyAbortController = new AbortController();
+
+    async function loadHistory() {
+      setState((previous) => ({
+        ...previous,
+        historyLoading: true
+      }));
+
+      try {
+        const historyPayload = await analyticsApi.getHistory(selectedDate, {
+          signal: historyAbortController.signal
+        });
+        const history = normalizeHistoryPayload(historyPayload);
+
+        if (!active) {
+          return;
+        }
+
+        setState((previous) => ({
+          ...previous,
+          dashboard: {
+            ...previous.dashboard,
+            availableDates: history.availableDates.length
+              ? history.availableDates
+              : previous.dashboard.availableDates,
+            scopes: {
+              ...previous.dashboard.scopes,
+              history: history.scopes.history
+            },
+            selectedDate: history.selectedDate || previous.dashboard.selectedDate,
+            timezone: history.timezone || previous.dashboard.timezone,
+            todayDate: history.todayDate || previous.dashboard.todayDate,
+            trackedRange: {
+              ...previous.dashboard.trackedRange,
+              ...history.trackedRange
+            }
+          },
+          historyLoading: false,
+          lastUpdatedAt: new Date().toISOString()
+        }));
+      } catch (error) {
+        if (!active || error?.name === "AbortError") {
+          return;
+        }
+
+        setState((previous) => ({
+          ...previous,
+          historyLoading: false
+        }));
+      }
+    }
+
+    void loadHistory();
+
+    return () => {
+      active = false;
+      historyAbortController.abort();
+    };
+  }, [activeChannel, selectedDate, state.authenticated, state.dashboard.scopes.history.date, state.loading]);
+
+  useEffect(() => {
+    if (
+      state.loading ||
+      !state.authenticated ||
+      activeChannel !== "lifetime" ||
+      state.lifetimeLoaded
+    ) {
+      return undefined;
+    }
+
+    let active = true;
+    const lifetimeAbortController = new AbortController();
+
+    async function loadLifetime() {
+      setState((previous) => ({
+        ...previous,
+        lifetimeLoading: true
+      }));
+
+      try {
+        const lifetimePayload = await analyticsApi.getLifetime({
+          signal: lifetimeAbortController.signal
+        });
+        const lifetime = normalizeLifetimePayload(lifetimePayload);
+
+        if (!active) {
+          return;
+        }
+
+        setState((previous) => ({
+          ...previous,
+          dashboard: {
+            ...previous.dashboard,
+            heatmap: lifetime.heatmap,
+            scopes: {
+              ...previous.dashboard.scopes,
+              lifetime: lifetime.scopes.lifetime
+            },
+            timezone: lifetime.timezone || previous.dashboard.timezone,
+            todayDate: lifetime.todayDate || previous.dashboard.todayDate,
+            trackedRange: {
+              ...previous.dashboard.trackedRange,
+              ...lifetime.trackedRange
+            }
+          },
+          lifetimeLoaded: true,
+          lifetimeLoading: false,
+          lastUpdatedAt: new Date().toISOString()
+        }));
+      } catch (error) {
+        if (!active || error?.name === "AbortError") {
+          return;
+        }
+
+        setState((previous) => ({
+          ...previous,
+          lifetimeLoading: false
+        }));
+      }
+    }
+
+    void loadLifetime();
+
+    return () => {
+      active = false;
+      lifetimeAbortController.abort();
+    };
+  }, [activeChannel, state.authenticated, state.lifetimeLoaded, state.loading]);
 
   useEffect(() => {
     if (state.loading || !state.authenticated) {
@@ -348,6 +570,11 @@ export function DashboardPage() {
     const remindersAbortController = new AbortController();
 
     async function loadReminders() {
+      setState((previous) => ({
+        ...previous,
+        remindersLoading: true
+      }));
+
       try {
         const remindersResponse = await remindersApi.list({
           signal: remindersAbortController.signal,
@@ -362,11 +589,17 @@ export function DashboardPage() {
           reminders: Array.isArray(remindersResponse?.reminders)
             ? remindersResponse.reminders
             : [],
+          remindersLoading: false
         }));
       } catch (error) {
         if (!active || error?.name === "AbortError") {
           return;
         }
+
+        setState((previous) => ({
+          ...previous,
+          remindersLoading: false
+        }));
       }
     }
 
@@ -395,11 +628,7 @@ export function DashboardPage() {
   }
 
   if (state.loading) {
-    return (
-      <div className="shell">
-        <div className="hero-card">Loading Disclytics...</div>
-      </div>
-    );
+    return <FullPageLoader />;
   }
 
   if (!state.authenticated) {
@@ -507,7 +736,7 @@ export function DashboardPage() {
     );
   }
 
-  if (state.error || !dashboard) {
+  if (state.error) {
     return (
       <div className="shell">
         <div className="hero-card">Failed to load dashboard: {state.error}</div>
@@ -518,6 +747,7 @@ export function DashboardPage() {
   const todayScope = dashboard.scopes.today;
   const historyScope = dashboard.scopes.history;
   const lifetimeScope = dashboard.scopes.lifetime;
+  const historyScopeReady = historyScope.date === dashboard.selectedDate;
   const activeChannelMeta =
     FEATURE_CHANNELS.find((channel) => channel.id === activeChannel) ||
     FEATURE_CHANNELS[0];
@@ -591,26 +821,63 @@ export function DashboardPage() {
           </section>
         </section>
         <section className="dashboard-grid analytics-primary-grid">
-          <HourlyUsageChart
-            data={historyScope.hourlyBreakdown}
-            selectedDate={dashboard.selectedDate}
-            voiceSessions={historyScope.voiceSessionsForChart}
-          />
-          <LeaderboardPanel
-            chatChannels={historyScope.leaderboards.chatChannels}
-            viewLabel={`History | ${dashboard.selectedDate}`}
-            voiceChannels={historyScope.leaderboards.voiceChannels}
-          />
+          {state.historyLoading || !historyScopeReady ? (
+            <>
+              <SectionLoader
+                copy="Rebuilding the hourly message and voice breakdown for the selected date."
+                title="Loading historical analytics"
+              />
+              <SectionLoader
+                copy="Refreshing the channel leaderboards for the selected day."
+                title="Loading historical leaderboards"
+              />
+            </>
+          ) : (
+            <>
+              <HourlyUsageChart
+                data={historyScope.hourlyBreakdown}
+                selectedDate={dashboard.selectedDate}
+                voiceSessions={historyScope.voiceSessionsForChart}
+              />
+              <LeaderboardPanel
+                chatChannels={historyScope.leaderboards.chatChannels}
+                viewLabel={`History | ${dashboard.selectedDate}`}
+                voiceChannels={historyScope.leaderboards.voiceChannels}
+              />
+            </>
+          )}
         </section>
-        <ActivityDetailsPanel
-          recentMessages={historyScope.recentMessages}
-          recentVoiceSessions={historyScope.recentVoiceSessions}
-        />
+        {state.historyLoading || !historyScopeReady ? (
+          <SectionLoader
+            copy="Loading the tracked voice sessions and message history for the selected date."
+            title="Loading activity log"
+          />
+        ) : (
+          <ActivityDetailsPanel
+            recentMessages={historyScope.recentMessages}
+            recentVoiceSessions={historyScope.recentVoiceSessions}
+          />
+        )}
       </>
     );
   }
 
   function renderLifetimeChannel() {
+    if (state.lifetimeLoading || !state.lifetimeLoaded) {
+      return (
+        <>
+          <ChannelIntro
+            channelName={activeChannelMeta.label}
+            description="This combines all tracked Disclytics history, including today, so you can follow your long-term voice, messaging, and channel activity trends."
+          />
+          <SectionLoader
+            copy="Loading lifetime trends, leaderboards, and heatmap data."
+            title="Loading lifetime analytics"
+          />
+        </>
+      );
+    }
+
     return (
       <>
         <ChannelIntro
@@ -651,6 +918,7 @@ export function DashboardPage() {
         />
         <ReminderPanel
           creatingReminder={creatingReminder}
+          loadingReminders={state.remindersLoading}
           onCreateReminder={handleCreateReminder}
           reminders={state.reminders}
         />

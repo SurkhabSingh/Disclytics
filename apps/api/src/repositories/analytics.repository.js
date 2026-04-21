@@ -68,6 +68,39 @@ async function getTrackedDateBounds(client, userId, timezone) {
   };
 }
 
+async function getAvailableActivityDates(client, userId, timezone) {
+  const { rows } = await client.query(
+    `
+      WITH message_dates AS (
+        SELECT DISTINCT DATE(occurred_at AT TIME ZONE $2) AS activity_date
+        FROM events
+        WHERE discord_user_id = $1
+          AND type = 'message'
+      ),
+      voice_dates AS (
+        SELECT DISTINCT series_day::DATE AS activity_date
+        FROM voice_sessions vs
+        CROSS JOIN LATERAL generate_series(
+          DATE(vs.start_time AT TIME ZONE $2),
+          DATE(${EFFECTIVE_VOICE_END_VS} AT TIME ZONE $2),
+          INTERVAL '1 day'
+        ) AS series_day
+        WHERE vs.discord_user_id = $1
+      )
+      SELECT activity_date
+      FROM (
+        SELECT activity_date FROM message_dates
+        UNION
+        SELECT activity_date FROM voice_dates
+      ) available_dates
+      ORDER BY activity_date DESC
+    `,
+    [userId, timezone]
+  );
+
+  return rows;
+}
+
 async function getLifetimeTrend(client, userId, startDate, endDate, timezone) {
   if (!startDate) {
     return [];
@@ -571,6 +604,7 @@ async function getGuildScopedSummary(client, userId, guildId, period) {
 }
 
 module.exports = {
+  getAvailableActivityDates,
   getCoverage,
   getGuildScopedSummary,
   getHeatmap,

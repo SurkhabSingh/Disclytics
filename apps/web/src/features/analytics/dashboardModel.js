@@ -115,12 +115,86 @@ function normalizeScope(scope, options = {}) {
   };
 }
 
+function normalizeTrackedRange(trackedRange) {
+  return {
+    firstActivityDate: asOptionalText(trackedRange?.firstActivityDate),
+    lastActivityDate: asOptionalText(trackedRange?.lastActivityDate)
+  };
+}
+
+function normalizeCoverage(coverage) {
+  return {
+    accessibleGuilds: asNonNegativeNumber(coverage?.accessibleGuilds),
+    trackedGuilds: asNonNegativeNumber(coverage?.trackedGuilds),
+    percent: asNonNegativeNumber(coverage?.percent)
+  };
+}
+
+function normalizeHeatmap(heatmap) {
+  return asArray(heatmap).map((row) => ({
+    dayOfWeek: asNonNegativeNumber(row?.dayOfWeek),
+    hourOfDay: asNonNegativeNumber(row?.hourOfDay),
+    eventCount: asNonNegativeNumber(row?.eventCount)
+  }));
+}
+
+export function createEmptyScope() {
+  return normalizeScope(null, { includeHourly: true, includeTrend: true });
+}
+
+export function normalizeOverviewPayload(payload) {
+  const todayDate = asOptionalText(payload?.todayDate) || new Date().toISOString().slice(0, 10);
+  const trackedRange = normalizeTrackedRange(payload?.trackedRange);
+  const availableDates = asArray(payload?.availableDates).filter((value) => typeof value === "string");
+  const selectedDate = asOptionalText(payload?.selectedDate) || availableDates[0] || trackedRange.lastActivityDate || todayDate;
+
+  return {
+    availableDates,
+    coverage: normalizeCoverage(payload?.coverage),
+    scopes: {
+      today: {
+        ...normalizeScope(payload?.scopes?.today, { includeHourly: true }),
+        date: asOptionalText(payload?.scopes?.today?.date) || todayDate
+      }
+    },
+    selectedDate,
+    timezone: asOptionalText(payload?.timezone),
+    todayDate,
+    trackedRange
+  };
+}
+
+export function normalizeHistoryPayload(payload) {
+  return {
+    availableDates: asArray(payload?.availableDates).filter((value) => typeof value === "string"),
+    scopes: {
+      history: {
+        ...normalizeScope(payload?.scopes?.history, { includeHourly: true }),
+        date: asOptionalText(payload?.scopes?.history?.date) || asOptionalText(payload?.selectedDate)
+      }
+    },
+    selectedDate: asOptionalText(payload?.selectedDate),
+    timezone: asOptionalText(payload?.timezone),
+    todayDate: asOptionalText(payload?.todayDate),
+    trackedRange: normalizeTrackedRange(payload?.trackedRange)
+  };
+}
+
+export function normalizeLifetimePayload(payload) {
+  return {
+    heatmap: normalizeHeatmap(payload?.heatmap),
+    scopes: {
+      lifetime: normalizeScope(payload?.scopes?.lifetime, { includeTrend: true })
+    },
+    timezone: asOptionalText(payload?.timezone),
+    todayDate: asOptionalText(payload?.todayDate),
+    trackedRange: normalizeTrackedRange(payload?.trackedRange)
+  };
+}
+
 export function normalizeDashboardPayload(payload) {
   const todayDate = asOptionalText(payload?.todayDate) || new Date().toISOString().slice(0, 10);
-  const trackedRange = {
-    firstActivityDate: asOptionalText(payload?.trackedRange?.firstActivityDate),
-    lastActivityDate: asOptionalText(payload?.trackedRange?.lastActivityDate)
-  };
+  const trackedRange = normalizeTrackedRange(payload?.trackedRange);
   const today = normalizeScope(payload?.scopes?.today, { includeHourly: true });
   const history = normalizeScope(payload?.scopes?.history, { includeHourly: true });
   const lifetime = normalizeScope(payload?.scopes?.lifetime, { includeTrend: true });
@@ -129,16 +203,8 @@ export function normalizeDashboardPayload(payload) {
 
   return {
     availableDates,
-    coverage: {
-      accessibleGuilds: asNonNegativeNumber(payload?.coverage?.accessibleGuilds),
-      trackedGuilds: asNonNegativeNumber(payload?.coverage?.trackedGuilds),
-      percent: asNonNegativeNumber(payload?.coverage?.percent)
-    },
-    heatmap: asArray(payload?.heatmap).map((row) => ({
-      dayOfWeek: asNonNegativeNumber(row?.dayOfWeek),
-      hourOfDay: asNonNegativeNumber(row?.hourOfDay),
-      eventCount: asNonNegativeNumber(row?.eventCount)
-    })),
+    coverage: normalizeCoverage(payload?.coverage),
+    heatmap: normalizeHeatmap(payload?.heatmap),
     scopes: {
       history: {
         ...history,
@@ -151,6 +217,7 @@ export function normalizeDashboardPayload(payload) {
       }
     },
     selectedDate,
+    timezone: asOptionalText(payload?.timezone),
     todayDate,
     trackedRange
   };

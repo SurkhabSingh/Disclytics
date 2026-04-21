@@ -151,6 +151,47 @@ export const analyticsApi = {
 
     const suffix = params.toString() ? `?${params.toString()}` : "";
     return request(`/api/analytics/dashboard${suffix}`, options);
+  },
+  getOverview(selectedDate = null, options = {}) {
+    const params = new URLSearchParams();
+    const timezone = getBrowserTimezone();
+
+    if (selectedDate) {
+      params.set("selectedDate", selectedDate);
+    }
+
+    if (timezone) {
+      params.set("timezone", timezone);
+    }
+
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request(`/api/analytics/overview${suffix}`, options);
+  },
+  getHistory(selectedDate = null, options = {}) {
+    const params = new URLSearchParams();
+    const timezone = getBrowserTimezone();
+
+    if (selectedDate) {
+      params.set("selectedDate", selectedDate);
+    }
+
+    if (timezone) {
+      params.set("timezone", timezone);
+    }
+
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request(`/api/analytics/history${suffix}`, options);
+  },
+  getLifetime(options = {}) {
+    const params = new URLSearchParams();
+    const timezone = getBrowserTimezone();
+
+    if (timezone) {
+      params.set("timezone", timezone);
+    }
+
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request(`/api/analytics/lifetime${suffix}`, options);
   }
 };
 
